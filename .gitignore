@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+
+# Credentials and OAuth tokens
+client_secret.json
+token.json
+token_backup.json
+auth.json
+
+# Browser profile and runtime data
+playwright_user_data/
+downloads/
+
+# macOS
+.DS_Store

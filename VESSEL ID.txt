@@ -1,0 +1,10 @@
+在step 1之前增加一個變數名為vessel_po_list, 此變數為google spreadsheet的id，執行以下判斷：
+if vessel_name =CSSC Le Havre, vessel_po_list=1iGYuhjwQaiwPLXHUgAthAQC_YuLL83K6ympzpbCjWWI,
+if vessel_name =CSSC Cape Town, vessel_po_list=19-xqXf3j9iliUvPJov_NOOCG2dC8Y0Nx6UuMToeumzg,
+if vessel_name =CSSC Immingham, vessel_po_list=1QhB9qCBwYwCL5aSoltHYokoBX9-d78o6VEy9AcF1XiE, 
+if vessel_name =CSSC Gladstone, vessel_po_list=1B0XrDZjNcx4UTjajIGUPnnYp5alClKxELYZY8ye-JR0, 
+if vessel_name=Anne, vessel_po_list=1dSi3BxHKVSCHAw-ztMI8CGNxARGKxmy6TN9PmfxR5zw, 
+if vessel_name=Gas Quest, vessel_po_list=1NC1lzsBD_NOP3LXSCRN1yvL6qdu42uUBgFkyAyxjz60, 
+if vessel_name=BH Power, vessel_po_list=1ZJZ2pyTFOge7-inVlqlufS77VgV3V0mIAIBasf0tA0s, 
+if vessel_name=Australis,  vessel_po_list=1msV0Saagu-cB2WzTl9Kfa3CxcyohF9JW0La4ElZEGjU, 
+if vessel_name=CS Hunan Venture,  vessel_po_list=1-DxjOaG_KGAhckjZB1bJfX7rUI-QwROrpufSo-l7IZI
