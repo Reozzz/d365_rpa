@@ -5,18 +5,21 @@ from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
+from googleapiclient.http import MediaIoBaseDownload
 from playwright.async_api import async_playwright
 
 # -----------------------------------------------------------------
 # 🎯 專案參數與 API 設定
 # -----------------------------------------------------------------
-# Require read/write access so we can update other vessel spreadsheets (Step 10)
-# If you previously authorized with readonly scope, delete `token.json` to re-authorize with the new scopes.
-SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
+# Require read/write access so we can update other vessel spreadsheets (Step 11),
+# and Drive read access so we can download PO attachments (Step 10).
+# If you previously authorized with fewer scopes, delete `token.json` to re-authorize with the new scopes.
+SCOPES = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive.readonly']
 SPREADSHEET_ID = '1tMonCbumPejfQCYgC8IwmPqBTZ9Tz5yuK7c-2qIk_8Y'
 RANGE_NAME = "'pending'!A2:K99"  # 讀取 Column A 至 Column K（包含 vessel_name）
 D365_URL = "https://wahkwong.operations.dynamics.com/?cmp=WGI&mi=THK_PurchWorkspace"
 CLIENT_SECRET_FILE = 'client_secret.json'
+DRIVE_DOWNLOAD_DIR = "/Users/fungz/Downloads"
 
 # 用戶 Browser Profile 儲存路徑（針對 macOS 環境，讓 Session/Cookie 持久化，避免重複 MFA）
 USER_DATA_DIR = os.path.abspath("./playwright_user_data")
@@ -107,11 +110,42 @@ def update_vessel_sheet_status(vessel_name, po_number, value):
         return False
 
 
-async def wait_for_new_row_after_add_line(page, timeout_ms=3000):
-    """點擊 Add line 後，等待固定 3 秒再繼續。"""
-    print(f"⏳ 等待 {timeout_ms // 1000} 秒後再繼續...")
-    await page.wait_for_timeout(timeout_ms)
-    return True
+async def wait_for_new_row_after_add_line(page, max_wait_ms=10000, poll_interval_ms=200, settle_ms=1000):
+    """點擊 Add line 後，偵測表格新增一行 row，偵測到後再等待 settle_ms 才繼續（取代固定等待 3 秒）。"""
+    row_locator_candidates = [
+        "div[role='row']",
+        "tr[role='row']",
+        "[role='grid'] [role='row']",
+        "table tr",
+    ]
+
+    active_selector = None
+    for sel in row_locator_candidates:
+        if await page.locator(sel).count() > 0:
+            active_selector = sel
+            break
+
+    if not active_selector:
+        print(f"⚠️ 未能定位到表格 row 元素，改為固定等待 {settle_ms / 1000:.0f} 秒...")
+        await page.wait_for_timeout(settle_ms)
+        return False
+
+    row_count_before = await page.locator(active_selector).count()
+    print(f"⏳ 等待新一行 row 出現 (目前列數: {row_count_before})...")
+
+    elapsed = 0
+    while elapsed < max_wait_ms:
+        await page.wait_for_timeout(poll_interval_ms)
+        elapsed += poll_interval_ms
+        row_count_now = await page.locator(active_selector).count()
+        if row_count_now > row_count_before:
+            print(f"✅ 偵測到新一行 row 出現 (目前列數: {row_count_now})，等待 {settle_ms / 1000:.0f} 秒後繼續...")
+            await page.wait_for_timeout(settle_ms)
+            return True
+
+    print(f"⚠️ 等待 {max_wait_ms / 1000:.0f} 秒仍未偵測到新一行，改為等待 {settle_ms / 1000:.0f} 秒後繼續...")
+    await page.wait_for_timeout(settle_ms)
+    return False
 
 
 async def click_finance_and_operations(page):
@@ -139,6 +173,187 @@ async def click_finance_and_operations(page):
         print("✅ 頁面已刷新，返回首頁流程完成。")
     else:
         print("⚠️ 未能精準找到 'Finance and Operations'，跳過點擊。")
+
+
+def _get_drive_service():
+    """建立 Google Drive API service，重用與 Sheets 相同的 token.json 憑證。"""
+    creds = None
+    if os.path.exists('token.json'):
+        creds = Credentials.from_authorized_user_file('token.json', SCOPES)
+
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        else:
+            print("⚠️ 無有效憑證可用，請重新以 OAuth 取得包含 Drive 權限的 token.json。")
+            return None
+
+    return build('drive', 'v3', credentials=creds)
+
+
+def _find_drive_file_id(service, file_name):
+    """在 Google Drive (含共用雲端硬碟) 依檔名精準搜尋檔案 id。"""
+    safe_name = file_name.replace("'", "\\'")
+    query = f"name = '{safe_name}' and trashed = false"
+    resp = service.files().list(
+        q=query,
+        fields="files(id, name)",
+        spaces="drive",
+        corpora="allDrives",
+        includeItemsFromAllDrives=True,
+        supportsAllDrives=True
+    ).execute()
+    files = resp.get('files', [])
+    return files[0]['id'] if files else None
+
+
+def download_po_attachments(po_number, need_credit_note):
+    """從 Google Drive 依 PO 號碼下載 invoice / receipt / (credit note) 至 DRIVE_DOWNLOAD_DIR。"""
+    os.makedirs(DRIVE_DOWNLOAD_DIR, exist_ok=True)
+
+    service = _get_drive_service()
+    if not service:
+        return {}
+
+    file_map = {
+        "invoice": f"{po_number}_invoice",
+        "receipt": f"{po_number}_receipt",
+    }
+    if need_credit_note:
+        file_map["credit_note"] = f"{po_number}_credit note"
+
+    downloaded = {}
+    for key, file_name in file_map.items():
+        print(f"🔍 正在 Google Drive 搜尋檔案: '{file_name}'...")
+        file_id = _find_drive_file_id(service, file_name)
+        if not file_id:
+            print(f"❌ 未能於 Google Drive 找到檔案: '{file_name}'")
+            continue
+
+        dest_path = os.path.join(DRIVE_DOWNLOAD_DIR, f"{file_name}.pdf")
+        try:
+            request = service.files().get_media(fileId=file_id, supportsAllDrives=True)
+            with open(dest_path, 'wb') as f:
+                downloader = MediaIoBaseDownload(f, request)
+                done = False
+                while not done:
+                    _, done = downloader.next_chunk()
+            print(f"✅ 已下載 '{file_name}' 至 {dest_path}")
+            downloaded[key] = dest_path
+        except Exception as e:
+            print(f"❌ 下載 '{file_name}' 失敗: {e}")
+
+    return downloaded
+
+
+async def upload_attachment_via_new(page, file_path, doc_type_label):
+    """在 Attachments 畫面點擊 New ➔ 選擇附件類型 ➔ Browse 上傳指定檔案。"""
+    print(f"👉 正在上傳附件 ({doc_type_label}): {file_path}")
+
+    new_btn_candidates = [
+        ("span[id$='_ctrlAdd_label'] (New dropdown 按鈕)", page.locator("span.button-label-dropDown[id$='_ctrlAdd_label']", has_text="New")),
+        ("role=button name='+New'", page.get_by_role("button", name="+New", exact=True)),
+        ("role=button name='New'", page.get_by_role("button", name="New", exact=True)),
+        ("text='+New'", page.get_by_text("+New", exact=True)),
+        ("text='New'", page.get_by_text("New", exact=True)),
+    ]
+
+    print("🔎 開始逐一檢查 'New' 按鈕候選 selector 的搜尋結果...")
+    new_btn = None
+    matched_label = None
+    for label, candidate in new_btn_candidates:
+        count = await candidate.count()
+        print(f"   ➜ [{label}] 找到 {count} 個匹配元素")
+        if count > 0:
+            for i in range(min(count, 5)):
+                el = candidate.nth(i)
+                try:
+                    is_visible = await el.is_visible()
+                    tag = await el.evaluate("el => el.tagName")
+                    text = (await el.inner_text()).strip()
+                    box = await el.bounding_box()
+                    print(f"      [{i}] tag={tag} visible={is_visible} text='{text}' box={box}")
+                except Exception as e:
+                    print(f"      [{i}] 讀取元素資訊失敗: {e}")
+            if not new_btn:
+                new_btn = candidate
+                matched_label = label
+
+    if not new_btn:
+        print("⚠️ 四個候選 selector 都搵唔到 'New'，嘗試用更闊的 xpath 搜尋畫面上所有含 'New' 文字的元素...")
+        broad_search = page.locator("xpath=//*[normalize-space(text())='New' or normalize-space(text())='+New']")
+        broad_count = await broad_search.count()
+        print(f"   ➜ [broad xpath] 找到 {broad_count} 個匹配元素")
+        for i in range(min(broad_count, 10)):
+            el = broad_search.nth(i)
+            try:
+                is_visible = await el.is_visible()
+                tag = await el.evaluate("el => el.tagName")
+                cls = await el.get_attribute("class")
+                box = await el.bounding_box()
+                print(f"      [{i}] tag={tag} visible={is_visible} class='{cls}' box={box}")
+            except Exception as e:
+                print(f"      [{i}] 讀取元素資訊失敗: {e}")
+        new_btn = page.get_by_role("button", name="New", exact=True)
+    else:
+        print(f"🎯 採用 selector: {matched_label}")
+
+    await new_btn.first.wait_for(state="visible", timeout=15000)
+    await new_btn.first.click()
+    print("✅ 已點擊 'New'，等待下拉式選單出現...")
+    await page.wait_for_timeout(500)
+
+    type_option = page.get_by_role("menuitem", name=doc_type_label, exact=True)
+    if await type_option.count() == 0:
+        type_option = page.get_by_text(doc_type_label, exact=True)
+    await type_option.first.wait_for(state="visible", timeout=10000)
+    await type_option.first.click()
+    print(f"✅ 已選擇附件類型: {doc_type_label}")
+    await page.wait_for_timeout(1000)
+
+    browse_candidates = [
+        ("id$='_UploadControlBrowseButton' (實際按鈕)", page.locator("[id$='_UploadControlBrowseButton']")),
+        ("role=button name='Browse'", page.get_by_role("button", name="Browse", exact=False)),
+        ("text='Browse'", page.get_by_text("Browse", exact=False)),
+    ]
+
+    print("🔎 開始逐一檢查 'Browse' 按鈕候選 selector 的搜尋結果...")
+    browse_btn = None
+    matched_browse_label = None
+    for label, candidate in browse_candidates:
+        count = await candidate.count()
+        print(f"   ➜ [{label}] 找到 {count} 個匹配元素")
+        if count > 0 and not browse_btn:
+            browse_btn = candidate
+            matched_browse_label = label
+
+    if not browse_btn:
+        browse_btn = page.get_by_text("Browse", exact=False)
+    else:
+        print(f"🎯 採用 selector: {matched_browse_label}")
+
+    await browse_btn.first.wait_for(state="visible", timeout=15000)
+
+    async with page.expect_file_chooser() as fc_info:
+        await browse_btn.first.click()
+    file_chooser = await fc_info.value
+    await file_chooser.set_files(file_path)
+    print(f"✅ 已選擇檔案: {file_path}")
+    await page.wait_for_timeout(1000)
+
+    confirm_candidates = ["OK", "Save", "Attach", "Insert"]
+    confirmed = False
+    for label in confirm_candidates:
+        btn = page.get_by_role("button", name=label, exact=True)
+        if await btn.count() > 0 and await btn.first.is_visible():
+            await btn.first.click()
+            print(f"✅ 已點擊 '{label}' 完成附件上傳。")
+            await page.wait_for_timeout(1000)
+            confirmed = True
+            break
+
+    if not confirmed:
+        print("⚠️ 未能自動定位到確認上傳按鈕，請檢查 D365 畫面確認附件已上傳。")
 
 
 def get_data_via_sheets_api():
@@ -914,16 +1129,76 @@ async def run_d365_rpa(records):
                         print("❌ Step 9: 未能定位到 '+ Add line' 按鈕！")
 
             # =============================================================
-            # 📌 Step 10: 根據 vessel_name 取得對應的 vessel_po_list (spreadsheet id)
+            # 📌 Step 10: 從 Google Drive 下載附件並上傳至 D365 Attachments
+            # =============================================================
+            print("\n👉 Step 10: 正在從 Google Drive 下載 PO 對應附件...")
+
+            need_credit_note = bool(target_credit_amt) and clean_amount(target_credit_amt) != 0.0
+            downloaded_files = download_po_attachments(target_po, need_credit_note)
+
+            missing_required = "invoice" not in downloaded_files or "receipt" not in downloaded_files
+            missing_credit_note = need_credit_note and "credit_note" not in downloaded_files
+
+            if missing_required or missing_credit_note:
+                error_msg = "error: missing drive file"
+                print("❌ 缺少必要附件，立即進入 error reporting。")
+                update_vessel_sheet_status(current_vessel, current_po, error_msg)
+                await click_finance_and_operations(page)
+                print("⏭️ 已記錄錯誤並繼續下一筆 PO。")
+                continue
+
+            print("👉 正在點擊 'Attachments'...")
+            attachments_candidates = [
+                ("role=tab name='Attachments'", page.get_by_role("tab", name="Attachments", exact=False)),
+                ("role=button name='Attachments'", page.get_by_role("button", name="Attachments", exact=False)),
+                ("text='Attachments'", page.get_by_text("Attachments", exact=False)),
+            ]
+
+            attachments_target = None
+            matched_attachments_label = None
+            for label, candidate in attachments_candidates:
+                count = await candidate.count()
+                print(f"   ➜ [{label}] 找到 {count} 個匹配元素")
+                if count > 0 and not attachments_target:
+                    attachments_target = candidate
+                    matched_attachments_label = label
+
+            if not attachments_target:
+                attachments_target = page.get_by_text("Attachments", exact=False)
+            else:
+                print(f"🎯 採用 selector: {matched_attachments_label}")
+
+            await attachments_target.first.wait_for(state="visible", timeout=15000)
+            await attachments_target.first.click()
+            print("✅ 已點擊 'Attachments'，先等待 1 秒讓畫面開始 refresh...")
+            await page.wait_for_timeout(1000)
+            print("⏳ 再等待畫面 networkidle 及穩定...")
+            await page.wait_for_load_state("networkidle", timeout=20000)
+            await page.wait_for_timeout(1500)
+
+            upload_plan = [
+                ("invoice", "Invoice"),
+                ("receipt", "Delivery Note / Service Report"),
+            ]
+            if need_credit_note:
+                upload_plan.append(("credit_note", "Credit Note"))
+
+            for file_key, doc_type_label in upload_plan:
+                await upload_attachment_via_new(page, downloaded_files[file_key], doc_type_label)
+
+            print("✅ Step 10 附件上傳流程完成。")
+
+            # =============================================================
+            # 📌 Step 11: 根據 vessel_name 取得對應的 vessel_po_list (spreadsheet id)
             #          並在該 spreadsheet 搜尋 po_number 所在列，將 Column R 更新為 'draft'
             # =============================================================
-            print("\n👉 Step 10: 進入 Step 10 處理流程...")
+            print("\n👉 Step 11: 進入 Step 11 處理流程...")
 
             vessel = item.get("vessel_name", "").strip()
             update_vessel_sheet_status(vessel, target_po, "draft")
 
             await click_finance_and_operations(page)
-            print("✅ Step 10 步驟處理完成。")
+            print("✅ Step 11 步驟處理完成。")
 
     except Exception as e:
         error_msg = error_msg or str(e) or "RPA error"
