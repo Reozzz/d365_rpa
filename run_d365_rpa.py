@@ -55,6 +55,24 @@ def get_vessel_spreadsheet_id(vessel_name):
     return mapping.get(vessel_name.lower()) if vessel_name else None
 
 
+# account_code 前綴 ➔ credit_account 對應表 (Step 9 用)，方便日後修改
+CREDIT_ACCOUNT_PREFIX_MAPPING = {
+    "61004": "c5600604",
+    "61007": "C5600608",
+    "61006": "c5600604",
+}
+CREDIT_ACCOUNT_DEFAULT = "C5600602"
+
+
+def get_credit_account(ac_code):
+    """根據 account_code 前綴取得 Step 9 應輸入的 credit_account。"""
+    ac_code = ac_code.strip()
+    for prefix, credit_account in CREDIT_ACCOUNT_PREFIX_MAPPING.items():
+        if ac_code.startswith(prefix):
+            return credit_account
+    return CREDIT_ACCOUNT_DEFAULT
+
+
 def update_vessel_sheet_status(vessel_name, po_number, value):
     """更新對應 vessel spreadsheet 的 Column R，支援 draft / error_msg。"""
     vessel_po_list = get_vessel_spreadsheet_id(vessel_name)
@@ -192,19 +210,24 @@ def _get_drive_service():
 
 
 def _find_drive_file_id(service, file_name):
-    """在 Google Drive (含共用雲端硬碟) 依檔名精準搜尋檔案 id。"""
+    """在 Google Drive (含共用雲端硬碟) 依檔名精準搜尋檔案 id；若同名檔案多於一個，只取最新（modifiedTime 最新）的一個。"""
     safe_name = file_name.replace("'", "\\'")
     query = f"name = '{safe_name}' and trashed = false"
     resp = service.files().list(
         q=query,
-        fields="files(id, name)",
+        fields="files(id, name, modifiedTime)",
         spaces="drive",
         corpora="allDrives",
         includeItemsFromAllDrives=True,
-        supportsAllDrives=True
+        supportsAllDrives=True,
+        orderBy="modifiedTime desc"
     ).execute()
     files = resp.get('files', [])
-    return files[0]['id'] if files else None
+    if not files:
+        return None
+    if len(files) > 1:
+        print(f"⚠️ 於 Google Drive 搜尋到 {len(files)} 個同名檔案 '{file_name}'，只取最新修改的一個 (modifiedTime={files[0].get('modifiedTime')})")
+    return files[0]['id']
 
 
 def download_po_attachments(po_number, need_credit_note):
@@ -436,6 +459,8 @@ async def run_d365_rpa(records):
 
     page = context.pages[0] if context.pages else await context.new_page()
 
+    results = []  # 記錄每筆 PO 的處理結果 (vessel_name / po_number / status)
+
     try:
         print(f"\n開啟 D365: {D365_URL}")
         await page.goto(D365_URL)
@@ -611,6 +636,7 @@ async def run_d365_rpa(records):
                     error_msg = "error: inv exist"
                     print("⚠️ 偵測到 'already exists'，立即進入 error reporting。")
                     update_vessel_sheet_status(current_vessel, current_po, error_msg)
+                    results.append({"vessel": current_vessel, "po": current_po, "status": "error", "error": error_msg})
                     await click_finance_and_operations(page)
                     print("⏭️ 已記錄錯誤並繼續下一筆 PO。")
                     continue
@@ -1029,6 +1055,7 @@ async def run_d365_rpa(records):
                 error_msg = "error: amount mismatch"
                 print(f"❌ 數字不相符 ({val_step8_total} != {val_step8_target})，立即進入 error reporting。")
                 update_vessel_sheet_status(current_vessel, current_po, error_msg)
+                results.append({"vessel": current_vessel, "po": current_po, "status": "error", "error": error_msg})
                 await click_finance_and_operations(page)
                 print("⏭️ 已記錄錯誤並繼續下一筆 PO。")
                 continue
@@ -1048,14 +1075,7 @@ async def run_d365_rpa(records):
 
                     # 1. 先判斷 credit_account 的值
                     ac_code = target_account_code.strip()
-                    if ac_code.startswith("61004"):
-                        credit_account = "c5600604"
-                    elif ac_code.startswith("61007"):
-                        credit_account = "C5600608"
-                    elif ac_code.startswith("61006"):
-                        credit_account = "c5600604"
-                    else:
-                        credit_account = "C5600602"
+                    credit_account = get_credit_account(ac_code)
 
                     print(f"📊 account_code 為 '{ac_code}' ➔ 判定 credit_account 應輸入: '{credit_account}'")
 
@@ -1143,6 +1163,7 @@ async def run_d365_rpa(records):
                 error_msg = "error: missing drive file"
                 print("❌ 缺少必要附件，立即進入 error reporting。")
                 update_vessel_sheet_status(current_vessel, current_po, error_msg)
+                results.append({"vessel": current_vessel, "po": current_po, "status": "error", "error": error_msg})
                 await click_finance_and_operations(page)
                 print("⏭️ 已記錄錯誤並繼續下一筆 PO。")
                 continue
@@ -1196,6 +1217,7 @@ async def run_d365_rpa(records):
 
             vessel = item.get("vessel_name", "").strip()
             update_vessel_sheet_status(vessel, target_po, "draft")
+            results.append({"vessel": current_vessel, "po": current_po, "status": "success"})
 
             await click_finance_and_operations(page)
             print("✅ Step 11 步驟處理完成。")
@@ -1205,11 +1227,27 @@ async def run_d365_rpa(records):
         if current_po and current_vessel:
             print(f"❌ RPA error detected for PO {current_po}: {error_msg}")
             update_vessel_sheet_status(current_vessel, current_po, error_msg)
+            results.append({"vessel": current_vessel, "po": current_po, "status": "error", "error": error_msg})
             await click_finance_and_operations(page)
         else:
             print(f"❌ 執行中發生未預期錯誤: {e}")
 
     finally:
+        # 📋 列印所有 PO 的處理結果總覽 (vessel_name / status)
+        print("\n" + "="*60)
+        print("📋 處理結果總覽:")
+        print("="*60)
+        if results:
+            for i, r in enumerate(results, 1):
+                if r["status"] == "success":
+                    status_display = "✅ Success"
+                else:
+                    status_display = f"❌ Error ({r.get('error', '')})"
+                print(f"  [{i}] Vessel: {r['vessel']} | PO: {r['po']} | {status_display}")
+        else:
+            print("  (無任何處理紀錄)")
+        print("="*60 + "\n")
+
         # 🎯 保持瀏覽器開啟以便進行 Debug
         print("\n" + "="*60)
         print("⏸️ [Debug 模式] 全部 PO 處理完成！瀏覽器將保持開啟狀態供您檢查與 Debug。")
