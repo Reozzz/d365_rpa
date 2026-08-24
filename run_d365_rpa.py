@@ -1,5 +1,4 @@
 import os
-import json
 import time
 import asyncio
 from google.auth.transport.requests import Request
@@ -8,8 +7,6 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 from playwright.async_api import async_playwright
-from mcp import ClientSession
-from mcp.client.streamable_http import streamable_http_client, create_mcp_http_client
 
 # -----------------------------------------------------------------
 # 🎯 專案參數與 API 設定
@@ -28,15 +25,15 @@ DRIVE_DOWNLOAD_DIR = "/Users/fungz/Downloads"
 USER_DATA_DIR = os.path.abspath("./playwright_user_data")
 
 # -----------------------------------------------------------------
-# 🎯 Step 0: n8n workflow 設定（透過 MCP 觸發 'invoices pending upload'，
-# 負責喺 RPA 開始前更新 pending sheet 內容）
+# 🎯 Step 0 設定：本機重現 n8n workflow「invoices pending upload」嘅邏輯，
+# 喺 RPA 開始前更新 pending sheet 內容（唔再依賴 n8n）
 # -----------------------------------------------------------------
-N8N_MCP_CONFIG_FILE = 'n8n_config.json'
-N8N_WORKFLOW_ID = 'CjVJEIw63n8wQn2j'  # workflow name: "invoices pending upload"
-N8N_MAX_RETRIES = 5
-N8N_RETRY_DELAY_SEC = 30       # 失敗（例如 too many requests）後等待再重試
-N8N_POLL_INTERVAL_SEC = 10     # 等待 workflow 執行完成期間嘅輪詢間隔
-N8N_EXECUTION_TIMEOUT_SEC = 1200  # 單次執行最長等待時間（20 分鐘）
+PENDING_VESSEL_NAMES = [
+    "CSSC Cape Town", "CSSC Gladstone", "CSSC Le Havre", "CSSC Immingham",
+    "CSSC Liao Ning", "CS Hunan Venture", "Anne", "Gas Quest", "BH POWER", "Australis"
+]
+STEP0_MAX_RETRIES = 5
+STEP0_RETRY_DELAY_SEC = 30  # 失敗（例如 Google API too many requests）後等待再重試
 
 def safe_get(row, index):
     """安全擷取欄位資料（避免 Row 尾端陣列越界）"""
@@ -450,83 +447,126 @@ def get_data_via_sheets_api():
     return records
 
 
-def _load_n8n_mcp_config():
-    """讀取本機 n8n_config.json，取得 MCP server 的 url 及 headers（含 access token）。"""
-    if not os.path.exists(N8N_MCP_CONFIG_FILE):
-        raise FileNotFoundError(
-            f"❌ 找不到 '{N8N_MCP_CONFIG_FILE}'！請先建立此檔案並填入 n8n MCP server 的 url 及 access token。"
-        )
-    with open(N8N_MCP_CONFIG_FILE, 'r') as f:
-        config = json.load(f)
-    server = config['mcpServers']['n8n-mcp']
-    return server['url'], server.get('headers', {})
+def _get_sheets_service():
+    """建立 Google Sheets API service，重用與 Drive 相同的 token.json 憑證。"""
+    creds = None
+    if os.path.exists('token.json'):
+        creds = Credentials.from_authorized_user_file('token.json', SCOPES)
+
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        else:
+            print("⚠️ 無有效憑證可用，請先以 OAuth 取得 token.json。")
+            return None
+
+    return build('sheets', 'v4', credentials=creds)
 
 
-async def trigger_n8n_pending_invoices_workflow():
+def _clear_pending_sheet(sheets_service):
+    """清空 pending sheet 內既有資料列（保留 header）。"""
+    sheets_service.spreadsheets().values().clear(
+        spreadsheetId=SPREADSHEET_ID, range="'pending'!A2:K1000"
+    ).execute()
+
+
+def _read_vessel_pending_rows(sheets_service, drive_service, vessel_name):
     """
-    Step 0: 透過 MCP 觸發 n8n workflow「invoices pending upload」，
-    等待其執行完成，用嚟喺 RPA 開始前更新 pending sheet 內容。
-    失敗（例如 too many requests）時等待 N8N_RETRY_DELAY_SEC 秒後重試，最多 N8N_MAX_RETRIES 次。
-    回傳 True/False 代表整體是否成功。
+    為單一 vessel，喺 Google Drive 搵返 '{vessel_name}_status' spreadsheet，
+    讀取其 'tech' 分頁，回傳符合條件（Receipt=Yes、有 Invoice Number、Invoice Status 未填）的 rows。
     """
-    url, headers = _load_n8n_mcp_config()
+    file_name = f"{vessel_name}_status"
+    file_id = _find_drive_file_id(drive_service, file_name)
+    if not file_id:
+        print(f"⚠️ 未搵到 '{file_name}'，跳過 {vessel_name}。")
+        return []
 
-    for attempt in range(1, N8N_MAX_RETRIES + 1):
-        print(f"👉 Step 0: 正在觸發 n8n workflow 'invoices pending upload' (第 {attempt}/{N8N_MAX_RETRIES} 次嘗試)...")
+    result = sheets_service.spreadsheets().values().get(
+        spreadsheetId=file_id, range="'tech'!A1:Z9999"
+    ).execute()
+    rows = result.get('values', [])
+    if not rows:
+        return []
+
+    header = rows[0]
+    matched = []
+    for row in rows[1:]:
+        rec = {header[i]: (row[i] if i < len(row) else "") for i in range(len(header))}
+        if (
+            str(rec.get("Receipt", "")).strip() == "Yes"
+            and str(rec.get("Invoice Number", "")).strip() != ""
+            and str(rec.get("Invoice Status", "")).strip() == ""
+        ):
+            matched.append(rec)
+    return matched
+
+
+def _append_pending_rows(sheets_service, vessel_name, records):
+    """將指定 vessel 已符合條件嘅 records 追加到 pending sheet。"""
+    values = []
+    for rec in records:
+        values.append([
+            vessel_name,
+            rec.get("PO Number", ""),
+            rec.get("Account Code", ""),
+            rec.get("Description", ""),
+            rec.get("Supplier", ""),
+            rec.get("CUR", ""),
+            rec.get("Remarks", ""),
+            rec.get("Invoice Number", ""),
+            rec.get("Invoice Amount", ""),
+            rec.get("Credit amount", ""),
+            rec.get("difference", ""),
+        ])
+    if not values:
+        return
+
+    sheets_service.spreadsheets().values().append(
+        spreadsheetId=SPREADSHEET_ID,
+        range="'pending'!A2:K2",
+        valueInputOption="USER_ENTERED",
+        insertDataOption="INSERT_ROWS",
+        body={"values": values}
+    ).execute()
+
+
+def refresh_pending_invoices():
+    """
+    Step 0: 本機重現 n8n workflow「invoices pending upload」嘅邏輯——
+    清空 pending sheet，然後逐個 vessel 喺其 '{vessel}_status' spreadsheet 嘅 'tech' 分頁
+    搵出 Receipt=Yes、有 Invoice Number、Invoice Status 未填嘅列，寫返入 pending sheet。
+    失敗（例如 Google API too many requests）時等待 STEP0_RETRY_DELAY_SEC 秒後重試，
+    最多 STEP0_MAX_RETRIES 次。回傳 True/False 代表整體是否成功。
+    """
+    for attempt in range(1, STEP0_MAX_RETRIES + 1):
+        print(f"👉 Step 0: 正在更新 pending PO 清單 (第 {attempt}/{STEP0_MAX_RETRIES} 次嘗試)...")
         try:
-            async with create_mcp_http_client(headers) as http_client:
-                async with streamable_http_client(url, http_client=http_client) as (read, write):
-                    async with ClientSession(read, write) as session:
-                        await session.initialize()
+            sheets_service = _get_sheets_service()
+            drive_service = _get_drive_service()
+            if not sheets_service or not drive_service:
+                raise RuntimeError("無法建立 Google API service，請檢查 token.json。")
 
-                        exec_result = await session.call_tool(
-                            'execute_workflow',
-                            {'workflowId': N8N_WORKFLOW_ID, 'executionMode': 'production'}
-                        )
-                        exec_text = "".join(c.text for c in exec_result.content if hasattr(c, 'text'))
-                        if getattr(exec_result, 'isError', False):
-                            raise RuntimeError(f"execute_workflow 回傳錯誤: {exec_text}")
+            _clear_pending_sheet(sheets_service)
 
-                        exec_data = json.loads(exec_text)
-                        execution_id = exec_data.get('executionId')
-                        if not execution_id:
-                            raise RuntimeError(f"execute_workflow 未回傳 executionId: {exec_text}")
+            for vessel_name in PENDING_VESSEL_NAMES:
+                records = _read_vessel_pending_rows(sheets_service, drive_service, vessel_name)
+                if records:
+                    _append_pending_rows(sheets_service, vessel_name, records)
+                    print(f"✅ {vessel_name}: 新增 {len(records)} 筆 pending PO。")
+                else:
+                    print(f"ℹ️ {vessel_name}: 無符合條件嘅 PO。")
 
-                        print(f"⏳ 已觸發執行 (executionId={execution_id})，等待完成中...")
-
-                        elapsed = 0
-                        status = 'running'
-                        while elapsed < N8N_EXECUTION_TIMEOUT_SEC:
-                            await asyncio.sleep(N8N_POLL_INTERVAL_SEC)
-                            elapsed += N8N_POLL_INTERVAL_SEC
-
-                            status_result = await session.call_tool(
-                                'get_execution',
-                                {'workflowId': N8N_WORKFLOW_ID, 'executionId': execution_id}
-                            )
-                            status_text = "".join(c.text for c in status_result.content if hasattr(c, 'text'))
-                            status_data = json.loads(status_text)
-                            status = status_data.get('execution', {}).get('status', 'unknown')
-
-                            if status not in ('running', 'new', 'waiting'):
-                                break
-
-                        if status == 'success':
-                            print(f"✅ Step 0: n8n workflow 執行成功 (executionId={execution_id})，pending sheet 已更新。")
-                            return True
-                        elif status in ('running', 'new', 'waiting'):
-                            raise RuntimeError(f"執行逾時 {N8N_EXECUTION_TIMEOUT_SEC} 秒仍未完成 (executionId={execution_id}, status={status})")
-                        else:
-                            raise RuntimeError(f"執行失敗 (executionId={execution_id}, status={status})")
+            print("✅ Step 0: pending sheet 已更新完成。")
+            return True
 
         except Exception as e:
             print(f"⚠️ Step 0 失敗: {e}")
 
-        if attempt < N8N_MAX_RETRIES:
-            print(f"⏳ 等待 {N8N_RETRY_DELAY_SEC} 秒後重試（有可能係 too many requests）...")
-            await asyncio.sleep(N8N_RETRY_DELAY_SEC)
+        if attempt < STEP0_MAX_RETRIES:
+            print(f"⏳ 等待 {STEP0_RETRY_DELAY_SEC} 秒後重試（有可能係 too many requests）...")
+            time.sleep(STEP0_RETRY_DELAY_SEC)
 
-    print(f"❌ Step 0: 已重試 {N8N_MAX_RETRIES} 次仍然失敗，中止 RPA。")
+    print(f"❌ Step 0: 已重試 {STEP0_MAX_RETRIES} 次仍然失敗，中止 RPA。")
     return False
 
 
@@ -1350,7 +1390,7 @@ async def run_d365_rpa(records):
         await asyncio.to_thread(input, "按下 Enter 鍵關閉程式: ")
 
 async def main():
-    step0_ok = await trigger_n8n_pending_invoices_workflow()
+    step0_ok = refresh_pending_invoices()
     if not step0_ok:
         print("❌ Step 0 未能完成，RPA 中止（沒有最新的 pending PO 資料可處理）。")
         return
