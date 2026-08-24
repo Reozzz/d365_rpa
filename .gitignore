@@ -9,7 +9,9 @@ __pycache__/
 client_secret.json
 token.json
 token_backup.json
+token_back up.json
 auth.json
+n8n_config.json
 
 # Browser profile and runtime data
 playwright_user_data/

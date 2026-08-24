@@ -1,4 +1,5 @@
 import os
+import json
 import time
 import asyncio
 from google.auth.transport.requests import Request
@@ -7,6 +8,8 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 from playwright.async_api import async_playwright
+from mcp import ClientSession
+from mcp.client.streamable_http import streamable_http_client, create_mcp_http_client
 
 # -----------------------------------------------------------------
 # 🎯 專案參數與 API 設定
@@ -23,6 +26,17 @@ DRIVE_DOWNLOAD_DIR = "/Users/fungz/Downloads"
 
 # 用戶 Browser Profile 儲存路徑（針對 macOS 環境，讓 Session/Cookie 持久化，避免重複 MFA）
 USER_DATA_DIR = os.path.abspath("./playwright_user_data")
+
+# -----------------------------------------------------------------
+# 🎯 Step 0: n8n workflow 設定（透過 MCP 觸發 'invoices pending upload'，
+# 負責喺 RPA 開始前更新 pending sheet 內容）
+# -----------------------------------------------------------------
+N8N_MCP_CONFIG_FILE = 'n8n_config.json'
+N8N_WORKFLOW_ID = 'CjVJEIw63n8wQn2j'  # workflow name: "invoices pending upload"
+N8N_MAX_RETRIES = 5
+N8N_RETRY_DELAY_SEC = 30       # 失敗（例如 too many requests）後等待再重試
+N8N_POLL_INTERVAL_SEC = 10     # 等待 workflow 執行完成期間嘅輪詢間隔
+N8N_EXECUTION_TIMEOUT_SEC = 1200  # 單次執行最長等待時間（20 分鐘）
 
 def safe_get(row, index):
     """安全擷取欄位資料（避免 Row 尾端陣列越界）"""
@@ -434,6 +448,86 @@ def get_data_via_sheets_api():
         print(f"  [{idx}] PO: {item['po_number']} | AccountCode: {item['account_code']} | Inv#: {item['invoice_number']} | Amt: {item['invoice_amount']} | CreditAmt: {item['credit_amount']} | Diff: {item['difference']}")
     
     return records
+
+
+def _load_n8n_mcp_config():
+    """讀取本機 n8n_config.json，取得 MCP server 的 url 及 headers（含 access token）。"""
+    if not os.path.exists(N8N_MCP_CONFIG_FILE):
+        raise FileNotFoundError(
+            f"❌ 找不到 '{N8N_MCP_CONFIG_FILE}'！請先建立此檔案並填入 n8n MCP server 的 url 及 access token。"
+        )
+    with open(N8N_MCP_CONFIG_FILE, 'r') as f:
+        config = json.load(f)
+    server = config['mcpServers']['n8n-mcp']
+    return server['url'], server.get('headers', {})
+
+
+async def trigger_n8n_pending_invoices_workflow():
+    """
+    Step 0: 透過 MCP 觸發 n8n workflow「invoices pending upload」，
+    等待其執行完成，用嚟喺 RPA 開始前更新 pending sheet 內容。
+    失敗（例如 too many requests）時等待 N8N_RETRY_DELAY_SEC 秒後重試，最多 N8N_MAX_RETRIES 次。
+    回傳 True/False 代表整體是否成功。
+    """
+    url, headers = _load_n8n_mcp_config()
+
+    for attempt in range(1, N8N_MAX_RETRIES + 1):
+        print(f"👉 Step 0: 正在觸發 n8n workflow 'invoices pending upload' (第 {attempt}/{N8N_MAX_RETRIES} 次嘗試)...")
+        try:
+            async with create_mcp_http_client(headers) as http_client:
+                async with streamable_http_client(url, http_client=http_client) as (read, write):
+                    async with ClientSession(read, write) as session:
+                        await session.initialize()
+
+                        exec_result = await session.call_tool(
+                            'execute_workflow',
+                            {'workflowId': N8N_WORKFLOW_ID, 'executionMode': 'production'}
+                        )
+                        exec_text = "".join(c.text for c in exec_result.content if hasattr(c, 'text'))
+                        if getattr(exec_result, 'isError', False):
+                            raise RuntimeError(f"execute_workflow 回傳錯誤: {exec_text}")
+
+                        exec_data = json.loads(exec_text)
+                        execution_id = exec_data.get('executionId')
+                        if not execution_id:
+                            raise RuntimeError(f"execute_workflow 未回傳 executionId: {exec_text}")
+
+                        print(f"⏳ 已觸發執行 (executionId={execution_id})，等待完成中...")
+
+                        elapsed = 0
+                        status = 'running'
+                        while elapsed < N8N_EXECUTION_TIMEOUT_SEC:
+                            await asyncio.sleep(N8N_POLL_INTERVAL_SEC)
+                            elapsed += N8N_POLL_INTERVAL_SEC
+
+                            status_result = await session.call_tool(
+                                'get_execution',
+                                {'workflowId': N8N_WORKFLOW_ID, 'executionId': execution_id}
+                            )
+                            status_text = "".join(c.text for c in status_result.content if hasattr(c, 'text'))
+                            status_data = json.loads(status_text)
+                            status = status_data.get('execution', {}).get('status', 'unknown')
+
+                            if status not in ('running', 'new', 'waiting'):
+                                break
+
+                        if status == 'success':
+                            print(f"✅ Step 0: n8n workflow 執行成功 (executionId={execution_id})，pending sheet 已更新。")
+                            return True
+                        elif status in ('running', 'new', 'waiting'):
+                            raise RuntimeError(f"執行逾時 {N8N_EXECUTION_TIMEOUT_SEC} 秒仍未完成 (executionId={execution_id}, status={status})")
+                        else:
+                            raise RuntimeError(f"執行失敗 (executionId={execution_id}, status={status})")
+
+        except Exception as e:
+            print(f"⚠️ Step 0 失敗: {e}")
+
+        if attempt < N8N_MAX_RETRIES:
+            print(f"⏳ 等待 {N8N_RETRY_DELAY_SEC} 秒後重試（有可能係 too many requests）...")
+            await asyncio.sleep(N8N_RETRY_DELAY_SEC)
+
+    print(f"❌ Step 0: 已重試 {N8N_MAX_RETRIES} 次仍然失敗，中止 RPA。")
+    return False
 
 
 async def run_d365_rpa(records):
@@ -1255,6 +1349,15 @@ async def run_d365_rpa(records):
         print("="*60 + "\n")
         await asyncio.to_thread(input, "按下 Enter 鍵關閉程式: ")
 
-if __name__ == "__main__":
+async def main():
+    step0_ok = await trigger_n8n_pending_invoices_workflow()
+    if not step0_ok:
+        print("❌ Step 0 未能完成，RPA 中止（沒有最新的 pending PO 資料可處理）。")
+        return
+
     records_data = get_data_via_sheets_api()
-    asyncio.run(run_d365_rpa(records_data))
+    await run_d365_rpa(records_data)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
