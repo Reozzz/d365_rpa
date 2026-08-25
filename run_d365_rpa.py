@@ -20,6 +20,7 @@ RANGE_NAME = "'pending'!A2:K99"  # 讀取 Column A 至 Column K（包含 vessel_
 D365_URL = "https://wahkwong.operations.dynamics.com/?cmp=WGI&mi=THK_PurchWorkspace"
 CLIENT_SECRET_FILE = 'client_secret.json'
 DRIVE_DOWNLOAD_DIR = "/Users/fungz/Downloads"
+RELOAD_EVERY_N_PO = 8  # 每處理幾多筆 PO 就強制重新載入頁面一次，避免 D365 SPA 隨時間變慢導致 timeout
 
 # 用戶 Browser Profile 儲存路徑（針對 macOS 環境，讓 Session/Cookie 持久化，避免重複 MFA）
 USER_DATA_DIR = os.path.abspath("./playwright_user_data")
@@ -488,7 +489,7 @@ def _read_vessel_pending_rows(sheets_service, drive_service, vessel_name):
     if not rows:
         return []
 
-    header = rows[0]
+    header = [h.strip() for h in rows[0]]  # 'tech' 分頁部分 header（例如 ' Credit amount '）前後有多餘空格
     matched = []
     for row in rows[1:]:
         rec = {header[i]: (row[i] if i < len(row) else "") for i in range(len(header))}
@@ -623,6 +624,17 @@ async def run_d365_rpa(records):
 
             print(f"\n--------------------------------------------------")
             print(f"進度 [{idx}/{len(records)}] ➔ 處理 PO: {target_po} | Invoice Number: {target_inv_num}")
+
+            # =============================================================
+            # 📌 每處理 8 筆 PO，強制重新載入頁面一次，釋放 D365 SPA 累積嘅記憶體/DOM 狀態
+            # (短時間內重新載入通常唔需要再做 2FA，所以唔喺度暫停等 Enter)
+            # =============================================================
+            if idx > 1 and (idx - 1) % RELOAD_EVERY_N_PO == 0:
+                print(f"🔄 已處理 {idx - 1} 筆 PO，強制重新載入頁面，避免 D365 SPA 隨時間變慢導致 timeout...")
+                await page.goto(D365_URL)
+                await page.wait_for_load_state("networkidle", timeout=30000)
+                await page.wait_for_timeout(2000)
+                print("✅ 頁面已重新載入，繼續處理下一筆 PO。")
 
             # =============================================================
             # 📌 Step 1: Click "New pending invoice"
