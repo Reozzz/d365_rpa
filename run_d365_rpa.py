@@ -286,52 +286,21 @@ async def upload_attachment_via_new(page, file_path, doc_type_label):
     print(f"👉 正在上傳附件 ({doc_type_label}): {file_path}")
 
     new_btn_candidates = [
-        ("span[id$='_ctrlAdd_label'] (New dropdown 按鈕)", page.locator("span.button-label-dropDown[id$='_ctrlAdd_label']", has_text="New")),
-        ("role=button name='+New'", page.get_by_role("button", name="+New", exact=True)),
-        ("role=button name='New'", page.get_by_role("button", name="New", exact=True)),
-        ("text='+New'", page.get_by_text("+New", exact=True)),
-        ("text='New'", page.get_by_text("New", exact=True)),
+        page.locator("span.button-label-dropDown[id$='_ctrlAdd_label']", has_text="New"),
+        page.get_by_role("button", name="+New", exact=True),
+        page.get_by_role("button", name="New", exact=True),
+        page.get_by_text("+New", exact=True),
+        page.get_by_text("New", exact=True),
     ]
 
-    print("🔎 開始逐一檢查 'New' 按鈕候選 selector 的搜尋結果...")
     new_btn = None
-    matched_label = None
-    for label, candidate in new_btn_candidates:
-        count = await candidate.count()
-        print(f"   ➜ [{label}] 找到 {count} 個匹配元素")
-        if count > 0:
-            for i in range(min(count, 5)):
-                el = candidate.nth(i)
-                try:
-                    is_visible = await el.is_visible()
-                    tag = await el.evaluate("el => el.tagName")
-                    text = (await el.inner_text()).strip()
-                    box = await el.bounding_box()
-                    print(f"      [{i}] tag={tag} visible={is_visible} text='{text}' box={box}")
-                except Exception as e:
-                    print(f"      [{i}] 讀取元素資訊失敗: {e}")
-            if not new_btn:
-                new_btn = candidate
-                matched_label = label
+    for candidate in new_btn_candidates:
+        if await candidate.count() > 0:
+            new_btn = candidate
+            break
 
     if not new_btn:
-        print("⚠️ 四個候選 selector 都搵唔到 'New'，嘗試用更闊的 xpath 搜尋畫面上所有含 'New' 文字的元素...")
-        broad_search = page.locator("xpath=//*[normalize-space(text())='New' or normalize-space(text())='+New']")
-        broad_count = await broad_search.count()
-        print(f"   ➜ [broad xpath] 找到 {broad_count} 個匹配元素")
-        for i in range(min(broad_count, 10)):
-            el = broad_search.nth(i)
-            try:
-                is_visible = await el.is_visible()
-                tag = await el.evaluate("el => el.tagName")
-                cls = await el.get_attribute("class")
-                box = await el.bounding_box()
-                print(f"      [{i}] tag={tag} visible={is_visible} class='{cls}' box={box}")
-            except Exception as e:
-                print(f"      [{i}] 讀取元素資訊失敗: {e}")
         new_btn = page.get_by_role("button", name="New", exact=True)
-    else:
-        print(f"🎯 採用 selector: {matched_label}")
 
     await new_btn.first.wait_for(state="visible", timeout=15000)
     await new_btn.first.click()
@@ -347,25 +316,19 @@ async def upload_attachment_via_new(page, file_path, doc_type_label):
     await page.wait_for_timeout(1000)
 
     browse_candidates = [
-        ("id$='_UploadControlBrowseButton' (實際按鈕)", page.locator("[id$='_UploadControlBrowseButton']")),
-        ("role=button name='Browse'", page.get_by_role("button", name="Browse", exact=False)),
-        ("text='Browse'", page.get_by_text("Browse", exact=False)),
+        page.locator("[id$='_UploadControlBrowseButton']"),
+        page.get_by_role("button", name="Browse", exact=False),
+        page.get_by_text("Browse", exact=False),
     ]
 
-    print("🔎 開始逐一檢查 'Browse' 按鈕候選 selector 的搜尋結果...")
     browse_btn = None
-    matched_browse_label = None
-    for label, candidate in browse_candidates:
-        count = await candidate.count()
-        print(f"   ➜ [{label}] 找到 {count} 個匹配元素")
-        if count > 0 and not browse_btn:
+    for candidate in browse_candidates:
+        if await candidate.count() > 0:
             browse_btn = candidate
-            matched_browse_label = label
+            break
 
     if not browse_btn:
         browse_btn = page.get_by_text("Browse", exact=False)
-    else:
-        print(f"🎯 採用 selector: {matched_browse_label}")
 
     await browse_btn.first.wait_for(state="visible", timeout=15000)
 
@@ -1316,24 +1279,19 @@ async def run_d365_rpa(records):
 
             print("👉 正在點擊 'Attachments'...")
             attachments_candidates = [
-                ("role=tab name='Attachments'", page.get_by_role("tab", name="Attachments", exact=False)),
-                ("role=button name='Attachments'", page.get_by_role("button", name="Attachments", exact=False)),
-                ("text='Attachments'", page.get_by_text("Attachments", exact=False)),
+                page.get_by_role("tab", name="Attachments", exact=False),
+                page.get_by_role("button", name="Attachments", exact=False),
+                page.get_by_text("Attachments", exact=False),
             ]
 
             attachments_target = None
-            matched_attachments_label = None
-            for label, candidate in attachments_candidates:
-                count = await candidate.count()
-                print(f"   ➜ [{label}] 找到 {count} 個匹配元素")
-                if count > 0 and not attachments_target:
+            for candidate in attachments_candidates:
+                if await candidate.count() > 0:
                     attachments_target = candidate
-                    matched_attachments_label = label
+                    break
 
             if not attachments_target:
                 attachments_target = page.get_by_text("Attachments", exact=False)
-            else:
-                print(f"🎯 採用 selector: {matched_attachments_label}")
 
             await attachments_target.first.wait_for(state="visible", timeout=15000)
             await attachments_target.first.click()
