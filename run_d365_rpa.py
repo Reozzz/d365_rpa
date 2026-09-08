@@ -90,7 +90,7 @@ def update_vessel_sheet_status(vessel_name, po_number, value):
     vessel_po_list = get_vessel_spreadsheet_id(vessel_name)
 
     if not vessel_po_list:
-        print(f"⚠️ 未為 vessel_name '{vessel_name}' 找到對應的 vessel_po_list，跳過更新。")
+        print(f"⚠️ No matching vessel_po_list found for vessel_name '{vessel_name}', skipping update.")
         return False
 
     try:
@@ -102,7 +102,7 @@ def update_vessel_sheet_status(vessel_name, po_number, value):
             if creds and creds.expired and creds.refresh_token:
                 creds.refresh(Request())
             else:
-                print("⚠️ 無有效憑證可用，請先以 OAuth 取得 token.json。無法更新外部 spreadsheet。")
+                print("⚠️ No valid credentials available. Please obtain token.json via OAuth first. Cannot update the external spreadsheet.")
                 return False
 
         service = build('sheets', 'v4', credentials=creds)
@@ -125,18 +125,18 @@ def update_vessel_sheet_status(vessel_name, po_number, value):
                     valueInputOption='RAW',
                     body=body
                 ).execute()
-                print(f"✅ 已在 spreadsheet {vessel_po_list} 的 {update_range} 更新為 '{value}' (PO={po_number})")
+                print(f"✅ Updated {update_range} in spreadsheet {vessel_po_list} to '{value}' (PO={po_number})")
                 found = True
                 break
 
         if not found:
-            print(f"⚠️ 在 spreadsheet {vessel_po_list} 中未找到 PO: {po_number}")
+            print(f"⚠️ PO not found in spreadsheet {vessel_po_list}: {po_number}")
             return False
 
         return True
 
     except Exception as e:
-        print(f"❌ 狀態更新失敗: {e}")
+        print(f"❌ Status update failed: {e}")
         return False
 
 
@@ -156,12 +156,12 @@ async def wait_for_new_row_after_add_line(page, max_wait_ms=10000, poll_interval
             break
 
     if not active_selector:
-        print(f"⚠️ 未能定位到表格 row 元素，改為固定等待 {settle_ms / 1000:.0f} 秒...")
+        print(f"⚠️ Could not locate table row elements, falling back to a fixed {settle_ms / 1000:.0f}s wait...")
         await page.wait_for_timeout(settle_ms)
         return False
 
     row_count_before = await page.locator(active_selector).count()
-    print(f"⏳ 等待新一行 row 出現 (目前列數: {row_count_before})...")
+    print(f"⏳ Waiting for a new row to appear (current row count: {row_count_before})...")
 
     elapsed = 0
     while elapsed < max_wait_ms:
@@ -169,18 +169,18 @@ async def wait_for_new_row_after_add_line(page, max_wait_ms=10000, poll_interval
         elapsed += poll_interval_ms
         row_count_now = await page.locator(active_selector).count()
         if row_count_now > row_count_before:
-            print(f"✅ 偵測到新一行 row 出現 (目前列數: {row_count_now})，等待 {settle_ms / 1000:.0f} 秒後繼續...")
+            print(f"✅ New row detected (current row count: {row_count_now}), waiting {settle_ms / 1000:.0f}s before continuing...")
             await page.wait_for_timeout(settle_ms)
             return True
 
-    print(f"⚠️ 等待 {max_wait_ms / 1000:.0f} 秒仍未偵測到新一行，改為等待 {settle_ms / 1000:.0f} 秒後繼續...")
+    print(f"⚠️ No new row detected after {max_wait_ms / 1000:.0f}s, waiting {settle_ms / 1000:.0f}s before continuing anyway...")
     await page.wait_for_timeout(settle_ms)
     return False
 
 
 async def click_finance_and_operations(page):
     """精準定位並點擊 Finance and Operations，等待頁面刷新回到首頁。"""
-    print("👉 尋找並點擊 'Finance and Operations'...")
+    print("👉 Locating and clicking 'Finance and Operations'...")
     finance_locators = [
         page.get_by_role("link", name="Finance and Operations", exact=True),
         page.get_by_role("button", name="Finance and Operations", exact=True),
@@ -191,18 +191,18 @@ async def click_finance_and_operations(page):
     for locator in finance_locators:
         if await locator.count() > 0:
             finance_target = locator.first
-            print("🎯 成功匹配 'Finance and Operations' 元素")
+            print("🎯 Matched 'Finance and Operations' element")
             break
 
     if finance_target:
         await finance_target.wait_for(state="visible", timeout=15000)
         await finance_target.click()
-        print("✅ 已點擊 'Finance and Operations'，等待頁面刷新回到首頁...")
+        print("✅ Clicked 'Finance and Operations', waiting for the page to refresh back to the home screen...")
         await page.wait_for_load_state("networkidle", timeout=20000)
         await page.wait_for_timeout(3000)
-        print("✅ 頁面已刷新，返回首頁流程完成。")
+        print("✅ Page refreshed, back to the home screen.")
     else:
-        print("⚠️ 未能精準找到 'Finance and Operations'，跳過點擊。")
+        print("⚠️ Could not precisely locate 'Finance and Operations', skipping click.")
 
 
 def _get_drive_service():
@@ -215,7 +215,7 @@ def _get_drive_service():
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
         else:
-            print("⚠️ 無有效憑證可用，請重新以 OAuth 取得包含 Drive 權限的 token.json。")
+            print("⚠️ No valid credentials available. Please re-authorize via OAuth to get a token.json with Drive access.")
             return None
 
     return build('drive', 'v3', credentials=creds)
@@ -238,7 +238,7 @@ def _find_drive_file_id(service, file_name):
     if not files:
         return None
     if len(files) > 1:
-        print(f"⚠️ 於 Google Drive 搜尋到 {len(files)} 個同名檔案 '{file_name}'，只取最新修改的一個 (modifiedTime={files[0].get('modifiedTime')})")
+        print(f"⚠️ Found {len(files)} files named '{file_name}' on Google Drive, using only the most recently modified one (modifiedTime={files[0].get('modifiedTime')})")
     return files[0]['id']
 
 
@@ -259,10 +259,10 @@ def download_po_attachments(po_number, need_credit_note):
 
     downloaded = {}
     for key, file_name in file_map.items():
-        print(f"🔍 正在 Google Drive 搜尋檔案: '{file_name}'...")
+        print(f"🔍 Searching Google Drive for file: '{file_name}'...")
         file_id = _find_drive_file_id(service, file_name)
         if not file_id:
-            print(f"❌ 未能於 Google Drive 找到檔案: '{file_name}'")
+            print(f"❌ File not found on Google Drive: '{file_name}'")
             continue
 
         dest_path = os.path.join(DRIVE_DOWNLOAD_DIR, f"{file_name}.pdf")
@@ -273,17 +273,17 @@ def download_po_attachments(po_number, need_credit_note):
                 done = False
                 while not done:
                     _, done = downloader.next_chunk()
-            print(f"✅ 已下載 '{file_name}' 至 {dest_path}")
+            print(f"✅ Downloaded '{file_name}' to {dest_path}")
             downloaded[key] = dest_path
         except Exception as e:
-            print(f"❌ 下載 '{file_name}' 失敗: {e}")
+            print(f"❌ Failed to download '{file_name}': {e}")
 
     return downloaded
 
 
 async def upload_attachment_via_new(page, file_path, doc_type_label):
     """在 Attachments 畫面點擊 New ➔ 選擇附件類型 ➔ Browse 上傳指定檔案。"""
-    print(f"👉 正在上傳附件 ({doc_type_label}): {file_path}")
+    print(f"👉 Uploading attachment ({doc_type_label}): {file_path}")
 
     new_btn_candidates = [
         page.locator("span.button-label-dropDown[id$='_ctrlAdd_label']", has_text="New"),
@@ -304,7 +304,7 @@ async def upload_attachment_via_new(page, file_path, doc_type_label):
 
     await new_btn.first.wait_for(state="visible", timeout=15000)
     await new_btn.first.click()
-    print("✅ 已點擊 'New'，等待下拉式選單出現...")
+    print("✅ Clicked 'New', waiting for the dropdown menu to appear...")
     await page.wait_for_timeout(500)
 
     type_option = page.get_by_role("menuitem", name=doc_type_label, exact=True)
@@ -312,7 +312,7 @@ async def upload_attachment_via_new(page, file_path, doc_type_label):
         type_option = page.get_by_text(doc_type_label, exact=True)
     await type_option.first.wait_for(state="visible", timeout=10000)
     await type_option.first.click()
-    print(f"✅ 已選擇附件類型: {doc_type_label}")
+    print(f"✅ Selected attachment type: {doc_type_label}")
     await page.wait_for_timeout(1000)
 
     browse_candidates = [
@@ -336,7 +336,7 @@ async def upload_attachment_via_new(page, file_path, doc_type_label):
         await browse_btn.first.click()
     file_chooser = await fc_info.value
     await file_chooser.set_files(file_path)
-    print(f"✅ 已選擇檔案: {file_path}")
+    print(f"✅ Selected file: {file_path}")
     await page.wait_for_timeout(1000)
 
     confirm_candidates = ["OK", "Save", "Attach", "Insert"]
@@ -345,43 +345,43 @@ async def upload_attachment_via_new(page, file_path, doc_type_label):
         btn = page.get_by_role("button", name=label, exact=True)
         if await btn.count() > 0 and await btn.first.is_visible():
             await btn.first.click()
-            print(f"✅ 已點擊 '{label}' 完成附件上傳。")
+            print(f"✅ Clicked '{label}', attachment upload complete.")
             await page.wait_for_timeout(1000)
             confirmed = True
             break
 
     if not confirmed:
-        print("⚠️ 未能自動定位到確認上傳按鈕，請檢查 D365 畫面確認附件已上傳。")
+        print("⚠️ Could not automatically locate the confirm-upload button, please check the D365 screen to confirm the attachment was uploaded.")
 
 
 def get_data_via_sheets_api():
     """【純 API Call】呼叫 Google Sheets API v4 讀取資料"""
     creds = None
-    
+
     # 讀取已保存的 Token
     if os.path.exists('token.json'):
         creds = Credentials.from_authorized_user_file('token.json', SCOPES)
-        
+
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
         else:
             if not os.path.exists(CLIENT_SECRET_FILE):
                 raise FileNotFoundError(
-                    f"❌ [API 錯誤] 找不到 '{CLIENT_SECRET_FILE}'！\n"
-                    "進行純 API Call 必須有此 OAuth 憑證檔。請確保已放入專案根目錄。"
+                    f"❌ [API Error] '{CLIENT_SECRET_FILE}' not found!\n"
+                    "This OAuth credential file is required for pure API calls. Please make sure it is placed in the project root directory."
                 )
             flow = InstalledAppFlow.from_client_secrets_file(CLIENT_SECRET_FILE, SCOPES)
             creds = flow.run_local_server(port=0)
-        
+
         # 儲存憑證供下次 API 自動呼叫
         with open('token.json', 'w') as token:
             token.write(creds.to_json())
 
-    print("🌐 發起 Google Sheets API 呼叫...")
+    print("🌐 Making Google Sheets API call...")
     service = build('sheets', 'v4', credentials=creds)
     sheet = service.spreadsheets()
-    
+
     # API 讀取請求
     result = sheet.values().get(spreadsheetId=SPREADSHEET_ID, range=RANGE_NAME).execute()
     rows = result.get('values', [])
@@ -390,7 +390,7 @@ def get_data_via_sheets_api():
     for row in rows:
         vessel_name = safe_get(row, 0)   # Column A
         po_number = safe_get(row, 1)     # Column B
-        
+
         # 只保留以 WGI-PO 開頭的 PO，排除其他格式
         if po_number and po_number.upper().startswith("WGI-PO"):
             record = {
@@ -404,10 +404,10 @@ def get_data_via_sheets_api():
             }
             records.append(record)
 
-    print(f"✅ [API 成功] 讀取到 {len(records)} 筆待處理資料：")
+    print(f"✅ [API Success] Retrieved {len(records)} pending record(s):")
     for idx, item in enumerate(records, 1):
-        print(f"  [{idx}] PO: {item['po_number']} | AccountCode: {item['account_code']} | Inv#: {item['invoice_number']} | Amt: {item['invoice_amount']} | CreditAmt: {item['credit_amount']} | Diff: {item['difference']}")
-    
+        print(f"  [{idx}] Vessel: {item['vessel_name']} | PO: {item['po_number']} | AccountCode: {item['account_code']} | Inv#: {item['invoice_number']} | Amt: {item['invoice_amount']} | CreditAmt: {item['credit_amount']} | Diff: {item['difference']}")
+
     return records
 
 
@@ -421,7 +421,7 @@ def _get_sheets_service():
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
         else:
-            print("⚠️ 無有效憑證可用，請先以 OAuth 取得 token.json。")
+            print("⚠️ No valid credentials available. Please obtain token.json via OAuth first.")
             return None
 
     return build('sheets', 'v4', credentials=creds)
@@ -442,7 +442,7 @@ def _read_vessel_pending_rows(sheets_service, drive_service, vessel_name):
     file_name = f"{vessel_name}_status"
     file_id = _find_drive_file_id(drive_service, file_name)
     if not file_id:
-        print(f"⚠️ 未搵到 '{file_name}'，跳過 {vessel_name}。")
+        print(f"⚠️ '{file_name}' not found, skipping {vessel_name}.")
         return []
 
     result = sheets_service.spreadsheets().values().get(
@@ -503,12 +503,12 @@ def refresh_pending_invoices():
     最多 STEP0_MAX_RETRIES 次。回傳 True/False 代表整體是否成功。
     """
     for attempt in range(1, STEP0_MAX_RETRIES + 1):
-        print(f"👉 Step 0: 正在更新 pending PO 清單 (第 {attempt}/{STEP0_MAX_RETRIES} 次嘗試)...")
+        print(f"👉 Step 0: Refreshing the pending PO list (attempt {attempt}/{STEP0_MAX_RETRIES})...")
         try:
             sheets_service = _get_sheets_service()
             drive_service = _get_drive_service()
             if not sheets_service or not drive_service:
-                raise RuntimeError("無法建立 Google API service，請檢查 token.json。")
+                raise RuntimeError("Could not create Google API service, please check token.json.")
 
             _clear_pending_sheet(sheets_service)
 
@@ -516,36 +516,36 @@ def refresh_pending_invoices():
                 records = _read_vessel_pending_rows(sheets_service, drive_service, vessel_name)
                 if records:
                     _append_pending_rows(sheets_service, vessel_name, records)
-                    print(f"✅ {vessel_name}: 新增 {len(records)} 筆 pending PO。")
+                    print(f"✅ {vessel_name}: added {len(records)} pending PO(s).")
                 else:
-                    print(f"ℹ️ {vessel_name}: 無符合條件嘅 PO。")
+                    print(f"ℹ️ {vessel_name}: no PO matched the criteria.")
 
-            print("✅ Step 0: pending sheet 已更新完成。")
+            print("✅ Step 0: pending sheet update complete.")
             return True
 
         except Exception as e:
-            print(f"⚠️ Step 0 失敗: {e}")
+            print(f"⚠️ Step 0 failed: {e}")
 
         if attempt < STEP0_MAX_RETRIES:
-            print(f"⏳ 等待 {STEP0_RETRY_DELAY_SEC} 秒後重試（有可能係 too many requests）...")
+            print(f"⏳ Waiting {STEP0_RETRY_DELAY_SEC}s before retrying (possibly too many requests)...")
             time.sleep(STEP0_RETRY_DELAY_SEC)
 
-    print(f"❌ Step 0: 已重試 {STEP0_MAX_RETRIES} 次仍然失敗，中止 RPA。")
+    print(f"❌ Step 0: still failing after {STEP0_MAX_RETRIES} retries, aborting RPA.")
     return False
 
 
 async def run_d365_rpa(records):
     """ Playwright 執行 D365 自動化 (單筆測試 & Debug 保持開啟模式) """
     if not records:
-        print("⚠️ 無待處理資料，程式結束。")
+        print("⚠️ No pending data to process, exiting program.")
         return
 
-    print(f"\n🧪 [批次處理模式已啟動] 將依序處理所有 {len(records)} 筆 PO")
+    print(f"\n🧪 [Batch mode started] Will process all {len(records)} PO(s) in sequence")
 
     p = await async_playwright().start()
-    
-    print(f"📂 使用持久化瀏覽器資料目錄: {USER_DATA_DIR}")
-    
+
+    print(f"📂 Using persistent browser data directory: {USER_DATA_DIR}")
+
     # 已加入最大化視窗參數 --start-maximized 與 no_viewport=True
     context = await p.chromium.launch_persistent_context(
         user_data_dir=USER_DATA_DIR,
@@ -560,15 +560,15 @@ async def run_d365_rpa(records):
     results = []  # 記錄每筆 PO 的處理結果 (vessel_name / po_number / status)
 
     try:
-        print(f"\n開啟 D365: {D365_URL}")
+        print(f"\nOpening D365: {D365_URL}")
         await page.goto(D365_URL)
 
         print("\n" + "="*60)
-        print("【提示】如果你已完成登入，系統會自動記住 Session。")
-        print("如果首次開啟或 Session 過期，請喺 Chrome 完成登入後返回 Terminal 按 Enter 繼續！")
+        print("[Note] If you've already logged in before, the session should be remembered automatically.")
+        print("If this is your first time or the session has expired, please complete login in Chrome, then return to the Terminal and press Enter to continue!")
         print("="*60 + "\n")
 
-        await asyncio.to_thread(input, "確定已進入 D365 主畫面後，請按 Enter 開始執行 RPA: ")
+        await asyncio.to_thread(input, "Once you've confirmed you're on the D365 home screen, press Enter to start the RPA: ")
 
         current_vessel = ""
         current_po = ""
@@ -586,40 +586,40 @@ async def run_d365_rpa(records):
             error_msg = ""
 
             print(f"\n--------------------------------------------------")
-            print(f"進度 [{idx}/{len(records)}] ➔ 處理 PO: {target_po} | Invoice Number: {target_inv_num}")
+            print(f"Progress [{idx}/{len(records)}] ➔ Processing PO: {target_po} | Invoice Number: {target_inv_num}")
 
             # =============================================================
             # 📌 每處理 8 筆 PO，強制重新載入頁面一次，釋放 D365 SPA 累積嘅記憶體/DOM 狀態
             # (短時間內重新載入通常唔需要再做 2FA，所以唔喺度暫停等 Enter)
             # =============================================================
             if idx > 1 and (idx - 1) % RELOAD_EVERY_N_PO == 0:
-                print(f"🔄 已處理 {idx - 1} 筆 PO，強制重新載入頁面，避免 D365 SPA 隨時間變慢導致 timeout...")
+                print(f"🔄 Processed {idx - 1} PO(s), forcing a page reload to avoid the D365 SPA slowing down and timing out...")
                 await page.goto(D365_URL)
                 await page.wait_for_load_state("networkidle", timeout=30000)
                 await page.wait_for_timeout(2000)
-                print("✅ 頁面已重新載入，繼續處理下一筆 PO。")
+                print("✅ Page reloaded, continuing with the next PO.")
 
             # =============================================================
             # 📌 Step 1: Click "New pending invoice"
             # =============================================================
-            print("👉 Step 1: 點擊 'New pending invoice'...")
-            
+            print("👉 Step 1: Clicking 'New pending invoice'...")
+
             new_invoice_btn = page.get_by_role("button", name="New pending invoice")
             if await new_invoice_btn.count() == 0:
                 new_invoice_btn = page.get_by_text("New pending invoice", exact=False)
 
             await new_invoice_btn.wait_for(state="visible", timeout=30000)
             await new_invoice_btn.click()
-            print("✅ 已點擊 'New pending invoice'，等待版面載入...")
-            
+            print("✅ Clicked 'New pending invoice', waiting for the page to load...")
+
             await page.wait_for_timeout(3000)
 
             # =============================================================
             # 📌 Step 2: 捲動並精準定位 "Purchase order (If applicable)" 輸入欄位
             # =============================================================
-            print("👉 Step 2: 正在尋找 'Purchase order (If applicable)' 輸入欄位...")
+            print("👉 Step 2: Looking for the 'Purchase order (If applicable)' input field...")
 
-            print("📜 執行 Scroll Down 滾動頁面...")
+            print("📜 Scrolling the page down...")
             for _ in range(3):
                 await page.mouse.move(600, 400)
                 await page.mouse.wheel(0, 600)
@@ -641,33 +641,33 @@ async def run_d365_rpa(records):
                 loc = page.locator(sel).first
                 if await loc.count() > 0:
                     po_input = loc
-                    print(f"🎯 成功匹配 PO 定位器: {sel}")
+                    print(f"🎯 Matched PO locator: {sel}")
                     break
 
             if not po_input:
                 po_input = page.get_by_label("Purchase order (If applicable)", exact=False).first
 
-            print("⏳ 等待 PO 輸入欄位掛載並捲動至畫面中央...")
+            print("⏳ Waiting for the PO input field to attach and scrolling it into view...")
             await po_input.wait_for(state="attached", timeout=30000)
 
             await po_input.evaluate("el => el.scrollIntoView({block: 'center', inline: 'nearest'})")
             await page.wait_for_timeout(1000)
 
             await po_input.wait_for(state="visible", timeout=10000)
-            print("👇 點擊 Purchase order (If applicable) 正下方的輸入框...")
+            print("👇 Clicking the input box just below 'Purchase order (If applicable)'...")
             await po_input.click(force=True)
             await page.wait_for_timeout(500)
 
             await po_input.fill("")
             await po_input.fill(target_po)
             await po_input.press("Tab")
-            print(f"✅ 已成功輸入 PO: {target_po} 並按 Tab 觸發連動...")
+            print(f"✅ Entered PO: {target_po} and pressed Tab to trigger auto-fill...")
 
             # =============================================================
             # 📌 等待 Vendor Account 自動帶出
             # =============================================================
-            print("⏳ 等待 'Vendor account' 自動帶出文字...")
-            
+            print("⏳ Waiting for 'Vendor account' to auto-populate...")
+
             vendor_candidates = [
                 "input[data-dyn-controlname*='OrderAccount']",
                 "input[data-dyn-controlname*='InvoiceAccount']",
@@ -680,7 +680,7 @@ async def run_d365_rpa(records):
                 loc = page.locator(sel).first
                 if await loc.count() > 0:
                     vendor_input = loc
-                    print(f"🎯 成功匹配 Vendor Account 定位器: {sel}")
+                    print(f"🎯 Matched Vendor Account locator: {sel}")
                     break
 
             if not vendor_input:
@@ -689,16 +689,16 @@ async def run_d365_rpa(records):
             for _ in range(15):
                 val = await vendor_input.input_value()
                 if val and len(val.strip()) > 0:
-                    print(f"🎉 成功！Vendor Account 自動帶出文字: {val}")
+                    print(f"🎉 Success! Vendor Account auto-populated: {val}")
                     break
                 await page.wait_for_timeout(1000)
             else:
-                print("⚠️ 注意: 等待 15 秒後 Vendor account 欄位仍未獲取到文字。")
+                print("⚠️ Note: Vendor account field still empty after waiting 15 seconds.")
 
             # =============================================================
             # 📌 Step 3: 精準尋找 "Invoice number" 欄位
             # =============================================================
-            print("\n👉 Step 3: 正在精準尋找 'Invoice number' 輸入欄位...")
+            print("\n👉 Step 3: Precisely locating the 'Invoice number' input field...")
 
             inv_num_candidates = [
                 "xpath=//label[normalize-space(text())='Invoice number']/following::input[1]",
@@ -712,28 +712,28 @@ async def run_d365_rpa(records):
                 loc = page.locator(sel).first
                 if await loc.count() > 0:
                     inv_input = loc
-                    print(f"🎯 成功匹配 Invoice Number 定位器: {sel}")
+                    print(f"🎯 Matched Invoice Number locator: {sel}")
                     break
 
             if not inv_input:
                 inv_input = page.get_by_label("Invoice number", exact=True).first
 
             if inv_input and await inv_input.count() > 0:
-                print("⏳ 等待 Invoice Number 欄位掛載並捲動至畫面...")
+                print("⏳ Waiting for the Invoice Number field to attach and scrolling it into view...")
                 await inv_input.wait_for(state="attached", timeout=15000)
                 await inv_input.evaluate("el => el.scrollIntoView({block: 'center', inline: 'nearest'})")
                 await page.wait_for_timeout(500)
-                
+
                 await inv_input.wait_for(state="visible", timeout=10000)
-                print(f"👇 點擊 Invoice Number 輸入框並填入: {target_inv_num}")
+                print(f"👇 Clicking the Invoice Number input box and entering: {target_inv_num}")
                 await inv_input.click(force=True)
                 await page.wait_for_timeout(300)
                 await inv_input.fill("")
                 await inv_input.fill(target_inv_num)
                 await inv_input.press("Tab")
-                print(f"✅ 已成功輸入 Invoice Number: {target_inv_num} 並按 Tab 離開。")
+                print(f"✅ Entered Invoice Number: {target_inv_num} and pressed Tab to leave the field.")
 
-                print("🔎 開始檢查是否出現 'already exists' 提示，持續搜尋 1 秒...")
+                print("🔎 Checking for an 'already exists' warning, polling for 1 second...")
                 already_exists_found = False
                 for _ in range(10):
                     if await page.get_by_text("already exists", exact=False).count() > 0:
@@ -743,19 +743,19 @@ async def run_d365_rpa(records):
 
                 if already_exists_found:
                     error_msg = "error: inv exist"
-                    print("⚠️ 偵測到 'already exists'，立即進入 error reporting。")
+                    print("⚠️ Detected 'already exists', proceeding directly to error reporting.")
                     update_vessel_sheet_status(current_vessel, current_po, error_msg)
                     results.append({"vessel": current_vessel, "po": current_po, "status": "error", "error": error_msg})
                     await click_finance_and_operations(page)
-                    print("⏭️ 已記錄錯誤並繼續下一筆 PO。")
+                    print("⏭️ Error logged, moving on to the next PO.")
                     continue
             else:
-                print("❌ 找不到專門的 'Invoice number' 輸入欄位，請檢查 D365 版面標籤名稱。")
+                print("❌ Could not find a dedicated 'Invoice number' input field, please check the D365 layout label names.")
 
             # =============================================================
             # 📌 Step 4: 精準尋找 "Document source" 欄位
             # =============================================================
-            print("\n👉 Step 4: 正在精準尋找 'Document source' 輸入欄位...")
+            print("\n👉 Step 4: Precisely locating the 'Document source' input field...")
 
             doc_source_candidates = [
                 "xpath=//*[contains(translate(text(), 'DOCUMENT SOURCE', 'document source'), 'document source')]/following::input[1]",
@@ -769,33 +769,33 @@ async def run_d365_rpa(records):
                 loc = page.locator(sel).first
                 if await loc.count() > 0:
                     doc_source_input = loc
-                    print(f"🎯 成功匹配 Document Source 定位器: {sel}")
+                    print(f"🎯 Matched Document Source locator: {sel}")
                     break
 
             if not doc_source_input:
                 doc_source_input = page.get_by_label("Document source", exact=False).first
 
             if doc_source_input and await doc_source_input.count() > 0:
-                print("⏳ 等待 Document Source 欄位掛載並捲動至畫面...")
+                print("⏳ Waiting for the Document Source field to attach and scrolling it into view...")
                 await doc_source_input.wait_for(state="attached", timeout=15000)
                 await doc_source_input.evaluate("el => el.scrollIntoView({block: 'center', inline: 'nearest'})")
                 await page.wait_for_timeout(500)
-                
+
                 await doc_source_input.wait_for(state="visible", timeout=10000)
-                print("👇 點擊 Document Source 輸入框並填入: d365")
+                print("👇 Clicking the Document Source input box and entering: d365")
                 await doc_source_input.click(force=True)
                 await page.wait_for_timeout(300)
                 await doc_source_input.fill("")
                 await doc_source_input.fill("d365")
                 await doc_source_input.press("Tab")
-                print("✅ 已成功輸入 Document Source: d365 並按 Tab 離開。")
+                print("✅ Entered Document Source: d365 and pressed Tab to leave the field.")
             else:
-                print("❌ 找不到專門的 'Document source' 輸入欄位，請檢查 D365 版面標籤名稱。")
+                print("❌ Could not find a dedicated 'Document source' input field, please check the D365 layout label names.")
 
             # =============================================================
             # 📌 Step 5: 完全精準尋找 "Invoice date" 欄位
             # =============================================================
-            print("\n👉 Step 5: 正在完全精準尋找 'Invoice date' 輸入欄位 (排除 'Invoice dates')...")
+            print("\n👉 Step 5: Precisely locating the 'Invoice date' input field (excluding 'Invoice dates')...")
 
             inv_date_candidates = [
                 "xpath=//label[normalize-space(translate(text(), 'INVOICE DATE', 'invoice date'))='invoice date']/following::input[1]",
@@ -810,28 +810,28 @@ async def run_d365_rpa(records):
                 loc = page.locator(sel).first
                 if await loc.count() > 0:
                     inv_date_input = loc
-                    print(f"🎯 成功精準匹配 Invoice Date 定位器: {sel}")
+                    print(f"🎯 Precisely matched Invoice Date locator: {sel}")
                     break
 
             if not inv_date_input or await inv_date_input.count() == 0:
                 inv_date_input = page.get_by_label("Invoice date", exact=True).first
 
             if inv_date_input and await inv_date_input.count() > 0:
-                print("⏳ 等待 Invoice Date 欄位掛載並捲動至畫面...")
+                print("⏳ Waiting for the Invoice Date field to attach and scrolling it into view...")
                 await inv_date_input.wait_for(state="attached", timeout=15000)
                 await inv_date_input.evaluate("el => el.scrollIntoView({block: 'center', inline: 'nearest'})")
                 await page.wait_for_timeout(500)
-                
+
                 await inv_date_input.wait_for(state="visible", timeout=10000)
-                print("👇 點擊 Invoice Date (無 s) 輸入框...")
+                print("👇 Clicking the Invoice Date (singular, not 'dates') input box...")
                 await inv_date_input.click(force=True)
                 await page.wait_for_timeout(300)
 
-                print("⌨️ 按下 Alt+Down (Alt+ArrowDown) 開啟日期選擇器 (Date Picker)...")
+                print("⌨️ Pressing Alt+Down (Alt+ArrowDown) to open the date picker...")
                 await inv_date_input.press("Alt+ArrowDown")
                 await page.wait_for_timeout(800)
 
-                print("👇 尋找並點擊 'Today' 按鈕...")
+                print("👇 Looking for and clicking the 'Today' button...")
                 today_btn = page.get_by_role("button", name="Today", exact=False)
                 if await today_btn.count() == 0:
                     today_btn = page.get_by_text("Today", exact=True)
@@ -840,19 +840,19 @@ async def run_d365_rpa(records):
 
                 if await today_btn.count() > 0:
                     await today_btn.first.click()
-                    print("✅ 已點擊 'Today'")
+                    print("✅ Clicked 'Today'")
                 else:
-                    print("⚠️ 未能自動定位到 'Today' 按鈕，嘗試發送 Tab 鍵...")
+                    print("⚠️ Could not automatically locate the 'Today' button, trying to send a Tab key instead...")
 
                 await page.keyboard.press("Tab")
-                print("✅ 已成功完成 Invoice Date 設定。")
+                print("✅ Invoice Date setup complete.")
             else:
-                print("❌ 找不到專門的 'Invoice date' 輸入欄位，請檢查 D365 版面標籤名稱。")
+                print("❌ Could not find a dedicated 'Invoice date' input field, please check the D365 layout label names.")
 
             # =============================================================
             # 📌 Step 6: 精準尋找 "Rebate type" 欄位
             # =============================================================
-            print("\n👉 Step 6: 正在精準尋找 'Rebate type' 輸入欄位...")
+            print("\n👉 Step 6: Precisely locating the 'Rebate type' input field...")
 
             cleaned_credit = target_credit_amt.strip()
             if cleaned_credit and cleaned_credit not in ["0", "0.00", "0.0"]:
@@ -860,7 +860,7 @@ async def run_d365_rpa(records):
             else:
                 rebate_text = "no rebate"
 
-            print(f"📊 Credit Amount 為 '{target_credit_amt}' ➔ 判定 Rebate type 應輸入: '{rebate_text}'")
+            print(f"📊 Credit Amount is '{target_credit_amt}' ➔ Rebate type should be: '{rebate_text}'")
 
             rebate_candidates = [
                 "xpath=//label[normalize-space(translate(text(), 'REBATE TYPE', 'rebate type'))='rebate type']/following::input[1]",
@@ -875,33 +875,33 @@ async def run_d365_rpa(records):
                 loc = page.locator(sel).first
                 if await loc.count() > 0:
                     rebate_input = loc
-                    print(f"🎯 成功匹配 Rebate Type 定位器: {sel}")
+                    print(f"🎯 Matched Rebate Type locator: {sel}")
                     break
 
             if not rebate_input or await rebate_input.count() == 0:
                 rebate_input = page.get_by_label("Rebate type", exact=False).first
 
             if rebate_input and await rebate_input.count() > 0:
-                print("⏳ 等待 Rebate type 欄位掛載並捲動至畫面...")
+                print("⏳ Waiting for the Rebate type field to attach and scrolling it into view...")
                 await rebate_input.wait_for(state="attached", timeout=15000)
                 await rebate_input.evaluate("el => el.scrollIntoView({block: 'center', inline: 'nearest'})")
                 await page.wait_for_timeout(500)
 
                 await rebate_input.wait_for(state="visible", timeout=10000)
-                print(f"👇 點擊 Rebate type 輸入框並填入: {rebate_text}")
+                print(f"👇 Clicking the Rebate type input box and entering: {rebate_text}")
                 await rebate_input.click(force=True)
                 await page.wait_for_timeout(300)
                 await rebate_input.fill("")
                 await rebate_input.fill(rebate_text)
                 await rebate_input.press("Tab")
-                print(f"✅ 已成功輸入 Rebate type: {rebate_text} 並按 Tab 離開。")
+                print(f"✅ Entered Rebate type: {rebate_text} and pressed Tab to leave the field.")
             else:
-                print("❌ 找不到專門的 'Rebate type' 輸入欄位，請檢查 D365 版面標籤名稱。")
+                print("❌ Could not find a dedicated 'Rebate type' input field, please check the D365 layout label names.")
 
             # =============================================================
             # 📌 Step 7: 檢查 Invoice total (Original currency) 與比對金額 (Add line 流程)
             # =============================================================
-            print("\n👉 Step 7: 正在讀取 'Invoice total (Original currency)' 欄位...")
+            print("\n👉 Step 7: Reading the 'Invoice total (Original currency)' field...")
 
             inv_total_candidates = [
                 "xpath=//*[contains(translate(text(), 'INVOICE TOTAL (ORIGINAL CURRENCY)', 'invoice total (original currency)'), 'invoice total (original currency)')]/following::input[1]",
@@ -915,7 +915,7 @@ async def run_d365_rpa(records):
                 loc = page.locator(sel).first
                 if await loc.count() > 0:
                     inv_total_input = loc
-                    print(f"🎯 成功匹配 Invoice total (Original currency) 定位器: {sel}")
+                    print(f"🎯 Matched Invoice total (Original currency) locator: {sel}")
                     break
 
             if not inv_total_input or await inv_total_input.count() == 0:
@@ -925,29 +925,29 @@ async def run_d365_rpa(records):
             if inv_total_input and await inv_total_input.count() > 0:
                 await inv_total_input.wait_for(state="attached", timeout=10000)
                 inv_total_val_str = await inv_total_input.input_value()
-                print(f"📖 讀取到 D365 上的 Invoice total (Original currency) = '{inv_total_val_str}'")
+                print(f"📖 Read Invoice total (Original currency) from D365 = '{inv_total_val_str}'")
             else:
-                print("⚠️ 未能自動定位到 Invoice total (Original currency) 欄位，將進行預設比較。")
+                print("⚠️ Could not automatically locate the Invoice total (Original currency) field, proceeding with a default comparison.")
 
             val_total = clean_amount(inv_total_val_str)
             val_target_amt = clean_amount(target_inv_amt)
 
-            print(f"⚖️ 數值比較: D365 ({val_total}) vs Google Sheet ({val_target_amt})")
+            print(f"⚖️ Comparing values: D365 ({val_total}) vs Google Sheet ({val_target_amt})")
 
             # 🎯 條件分流：金額不相等才執行 Add line 流程
             if val_total != val_target_amt:
-                print("⚠️ 兩者不相等！開始執行 Add line 新增列流程...")
+                print("⚠️ Values don't match! Starting the Add line process...")
 
                 # 📜 執行 Scroll Up & Down 確保表格與 Add line Toolbar 載入
-                print("📜 執行 Scroll Up & Down 確保表格與按鈕完全展開...")
+                print("📜 Scrolling up & down to make sure the table and buttons are fully rendered...")
                 await page.mouse.wheel(0, -300)
                 await page.wait_for_timeout(300)
                 await page.mouse.wheel(0, 500)
                 await page.wait_for_timeout(500)
 
                 # 1. 嚴格搜尋以 'C' / 'c' 開頭的 Item number 欄位 (強制排除 Budget check 等雜訊)
-                print("🔍 正在精準搜尋 Item number (必須以 'C' 或 'c' 開頭)...")
-                
+                print("🔍 Precisely searching for the Item number (must start with 'C' or 'c')...")
+
                 item_num_candidates = [
                     "input[aria-label*='Item number' i]",
                     "input[data-dyn-controlname*='ItemId' i]",
@@ -956,7 +956,7 @@ async def run_d365_rpa(records):
                 ]
 
                 recorded_item_num = ""
-                
+
                 # 遍歷所有候選元素，精準鎖定以 c/C 開頭的值
                 for sel in item_num_candidates:
                     locs = page.locator(sel)
@@ -970,7 +970,7 @@ async def run_d365_rpa(records):
                             val = val.strip()
                             if val.lower().startswith('c'):
                                 recorded_item_num = val
-                                print(f"🎯 成功驗證並獲得以 'C' 開頭的 Item number: '{recorded_item_num}'")
+                                print(f"🎯 Verified and captured an Item number starting with 'C': '{recorded_item_num}'")
                                 break
                         except Exception:
                             continue
@@ -979,7 +979,7 @@ async def run_d365_rpa(records):
 
                 # 備用機制：若 input 框未找到，嘗試從網格 cell / span 中提取以 'C' 開頭的值
                 if not recorded_item_num:
-                    print("⚠️ 未能在輸入框中提取到 'C' 開頭的值，嘗試搜尋 Data Grid 網格內單元格...")
+                    print("⚠️ Could not extract a 'C'-prefixed value from the input fields, trying to search the data grid cells instead...")
                     grid_cells = page.locator("xpath=//div[contains(@aria-label, 'Item number') or contains(@data-dyn-controlname, 'ItemId')]//input | //div[contains(@aria-label, 'Item number') or contains(@data-dyn-controlname, 'ItemId')]//span")
                     grid_count = await grid_cells.count()
                     for i in range(grid_count):
@@ -991,21 +991,21 @@ async def run_d365_rpa(records):
                                 text_val = await cell.input_value()
                             else:
                                 text_val = await cell.inner_text()
-                            
+
                             text_val = text_val.strip()
                             if text_val.lower().startswith('c'):
                                 recorded_item_num = text_val
-                                print(f"🎯 成功從表格網格中獲得 Item number: '{recorded_item_num}'")
+                                print(f"🎯 Captured Item number from the data grid: '{recorded_item_num}'")
                                 break
                         except Exception:
                             continue
 
                 if not recorded_item_num:
-                    print("⚠️ 未能自動提取到以 'C' 開頭的 Item number，請檢查 D365 畫面。")
+                    print("⚠️ Could not automatically extract an Item number starting with 'C', please check the D365 screen.")
 
                 # 2. 精準尋找帶有 '+' 圖示/文字的 Add line 按鈕 (排除 Fixed 與 Percent)
-                print("👉 正在搜尋 '+ Add line' 按鈕 (包含 + 符號，並排除 Fixed 及 Percent)...")
-                
+                print("👉 Searching for the '+ Add line' button (must include the + symbol, excluding Fixed and Percent)...")
+
                 add_line_candidates = [
                     "xpath=//button[contains(., 'Add line') and not(contains(., 'Fixed')) and not(contains(., 'Percent'))]",
                     "xpath=//button[contains(., 'Add Line') and not(contains(., 'Fixed')) and not(contains(., 'Percent'))]",
@@ -1018,7 +1018,7 @@ async def run_d365_rpa(records):
                     loc = page.locator(sel).first
                     if await loc.count() > 0:
                         add_line_btn = loc
-                        print(f"🎯 成功匹配 Add line 按鈕定位器: {sel}")
+                        print(f"🎯 Matched Add line button locator: {sel}")
                         break
 
                 if not add_line_btn or await add_line_btn.count() == 0:
@@ -1027,103 +1027,103 @@ async def run_d365_rpa(records):
                 if add_line_btn and await add_line_btn.count() > 0:
                     await add_line_btn.evaluate("el => el.scrollIntoView({block: 'center', inline: 'nearest'})")
                     await page.wait_for_timeout(500)
-                    print("👇 點擊 '+ Add line' 按鈕...")
+                    print("👇 Clicking the '+ Add line' button...")
                     await add_line_btn.click(force=True)
-                    print("✅ 已點擊 'Add line'...")
+                    print("✅ Clicked 'Add line'...")
 
                     # =============================================================
                     # 📌 新增欄位自動化 (根據 difference 正負數判斷分流)
                     # =============================================================
                     diff_val = clean_amount(target_diff)
-                    print(f"\n🔍 檢查 Difference 數值: {diff_val}")
+                    print(f"\n🔍 Checking Difference value: {diff_val}")
 
                     if diff_val >= 0:
-                        print("▶️ Difference 為正數（或 0），執行正數填寫流程...")
-                        
+                        print("▶️ Difference is positive (or 0), running the positive-value fill flow...")
+
                         await wait_for_new_row_after_add_line(page)
 
                         if recorded_item_num:
-                            print(f"⌨️ 輸入剛才複製的 Item number: {recorded_item_num}")
+                            print(f"⌨️ Typing the previously captured Item number: {recorded_item_num}")
                             await page.keyboard.type(recorded_item_num, delay=50)
                         else:
-                            print("⚠️ 注意: 未能獲取到以 'C' 開頭的 Item number，將跳過輸入 Item number。")
+                            print("⚠️ Note: no Item number starting with 'C' was captured, skipping Item number entry.")
 
-                        print("⌨️ 按 3 次 Tab 鍵 (每 100ms 間隔)...")
+                        print("⌨️ Pressing Tab 3 times (100ms apart)...")
                         for _ in range(3):
                             await page.keyboard.press("Tab")
                             await page.wait_for_timeout(100)
 
-                        print("⌨️ 輸入 'delivery charge'...")
+                        print("⌨️ Typing 'delivery charge'...")
                         await page.keyboard.type("delivery charge", delay=50)
 
-                        print("⌨️ 按 8 次 Tab 鍵 (每 100ms 間隔)...")
+                        print("⌨️ Pressing Tab 8 times (100ms apart)...")
                         for _ in range(8):
                             await page.keyboard.press("Tab")
                             await page.wait_for_timeout(100)
 
-                        print(f"⌨️ 輸入 Difference 數值: {target_diff}")
+                        print(f"⌨️ Typing Difference value: {target_diff}")
                         await page.keyboard.type(str(target_diff), delay=50)
 
-                        print("💾 按下 Alt+S 進行儲存...")
+                        print("💾 Pressing Alt+S to save...")
                         await page.keyboard.press("Alt+s")
                         await page.wait_for_timeout(1000)
-                        
-                        print("✅ 正數流程已完成並已觸發 Alt+S 儲存！")
+
+                        print("✅ Positive-value flow complete, Alt+S save triggered!")
 
                     else:
-                        print("▶️ Difference 為負數，執行負數填寫流程...")
+                        print("▶️ Difference is negative, running the negative-value fill flow...")
 
                         await wait_for_new_row_after_add_line(page)
 
                         if recorded_item_num:
-                            print(f"⌨️ 輸入剛才複製的 Item number: {recorded_item_num}")
+                            print(f"⌨️ Typing the previously captured Item number: {recorded_item_num}")
                             await page.keyboard.type(recorded_item_num, delay=50)
                         else:
-                            print("⚠️ 注意: 未能獲取到以 'C' 開頭的 Item number，將跳過輸入 Item number。")
+                            print("⚠️ Note: no Item number starting with 'C' was captured, skipping Item number entry.")
 
-                        print("⌨️ 按 3 次 Tab 鍵 (每 100ms 間隔)...")
+                        print("⌨️ Pressing Tab 3 times (100ms apart)...")
                         for _ in range(3):
                             await page.keyboard.press("Tab")
                             await page.wait_for_timeout(100)
 
-                        print("⌨️ 輸入 'adjustment'...")
+                        print("⌨️ Typing 'adjustment'...")
                         await page.keyboard.type("adjustment", delay=50)
 
-                        print("⌨️ 按 6 次 Tab 鍵 (每 100ms 間隔)...")
+                        print("⌨️ Pressing Tab 6 times (100ms apart)...")
                         for _ in range(6):
                             await page.keyboard.press("Tab")
                             await page.wait_for_timeout(100)
 
-                        print("⌨️ 輸入 '-1'...")
+                        print("⌨️ Typing '-1'...")
                         await page.keyboard.type("-1", delay=50)
 
-                        print("⌨️ 按 2 次 Tab 鍵 (每 100ms 間隔)...")
+                        print("⌨️ Pressing Tab 2 times (100ms apart)...")
                         for _ in range(2):
                             await page.keyboard.press("Tab")
                             await page.wait_for_timeout(100)
 
                         abs_diff_str = str(abs(diff_val))
-                        print(f"⌨️ 輸入 Difference 絕對值: {abs_diff_str}")
+                        print(f"⌨️ Typing the absolute Difference value: {abs_diff_str}")
                         await page.keyboard.type(abs_diff_str, delay=50)
 
-                        print("💾 按下 Alt+S 進行儲存...")
+                        print("💾 Pressing Alt+S to save...")
                         await page.keyboard.press("Alt+s")
                         await page.wait_for_timeout(1000)
 
-                        print("✅ 負數流程已完成並已觸發 Alt+S 儲存！")
+                        print("✅ Negative-value flow complete, Alt+S save triggered!")
 
                 else:
-                    print("❌ 未能精準定位到 '+ Add line' 按鈕！")
+                    print("❌ Could not precisely locate the '+ Add line' button!")
 
             else:
                 # 🎯 金額相等，跳過 Step 7 直接到達這裡
-                print("✅ 金額相等 (D365 == Google Sheet)，無需新增列，直接跳過 Step 7！")
+                print("✅ Amounts match (D365 == Google Sheet), no need to add a line, skipping Step 7!")
 
             # =============================================================
             # 📌 Step 8: 重新讀取 Invoice total (Original currency) 並比對 invoice_amount
             # =============================================================
-            print("\n👉 Step 8: 正在讀取 'Invoice total (Original currency)' 正下方的欄位數字...")
-            print("⏳ 先等待 2 秒，讓畫面穩定後再執行 Step 8 比對...")
+            print("\n👉 Step 8: Reading the number in the field just below 'Invoice total (Original currency)'...")
+            print("⏳ Waiting 2 seconds for the screen to settle before running the Step 8 comparison...")
             await page.wait_for_timeout(2000)
 
             inv_total_candidates_step8 = [
@@ -1138,7 +1138,7 @@ async def run_d365_rpa(records):
                 loc = page.locator(sel).first
                 if await loc.count() > 0:
                     inv_total_input_step8 = loc
-                    print(f"🎯 Step 8: 成功定位 Invoice total (Original currency) 欄位: {sel}")
+                    print(f"🎯 Step 8: Located the Invoice total (Original currency) field: {sel}")
                     break
 
             if not inv_total_input_step8 or await inv_total_input_step8.count() == 0:
@@ -1148,48 +1148,48 @@ async def run_d365_rpa(records):
             if inv_total_input_step8 and await inv_total_input_step8.count() > 0:
                 await inv_total_input_step8.wait_for(state="attached", timeout=10000)
                 step8_total_str = await inv_total_input_step8.input_value()
-                print(f"📖 Step 8: 讀取到的數字為 = '{step8_total_str}'")
+                print(f"📖 Step 8: Read value = '{step8_total_str}'")
             else:
-                print("⚠️ Step 8: 未能定位到欄位。")
+                print("⚠️ Step 8: Could not locate the field.")
 
             val_step8_total = clean_amount(step8_total_str)
             val_step8_target = clean_amount(target_inv_amt)
 
-            print(f"⚖️ Step 8 比對: 讀取到的數字 ({val_step8_total}) vs invoice_amount ({val_step8_target})")
+            print(f"⚖️ Step 8 comparison: read value ({val_step8_total}) vs invoice_amount ({val_step8_target})")
 
             if val_step8_total == val_step8_target:
-                print("✅ 數字相符 (等於 invoice_amount)，將執行 Step 9！")
+                print("✅ Values match (equal to invoice_amount), proceeding to Step 9!")
                 run_step_9 = True
             else:
                 error_msg = "error: amount mismatch"
-                print(f"❌ 數字不相符 ({val_step8_total} != {val_step8_target})，立即進入 error reporting。")
+                print(f"❌ Values don't match ({val_step8_total} != {val_step8_target}), proceeding directly to error reporting.")
                 update_vessel_sheet_status(current_vessel, current_po, error_msg)
                 results.append({"vessel": current_vessel, "po": current_po, "status": "error", "error": error_msg})
                 await click_finance_and_operations(page)
-                print("⏭️ 已記錄錯誤並繼續下一筆 PO。")
+                print("⏭️ Error logged, moving on to the next PO.")
                 continue
 
             # =============================================================
             # 📌 Step 9: Credit Amount 判斷與處理流程 (只有 Step 8 條件成立才執行)
             # =============================================================
             if run_step_9:
-                print("\n👉 Step 9: 判斷 Credit Amount 是否存在...")
+                print("\n👉 Step 9: Checking whether Credit Amount exists...")
 
                 credit_amt_val = clean_amount(target_credit_amt)
 
                 if not target_credit_amt or credit_amt_val == 0.0:
-                    print("ℹ️ credit_amount 不存在或為 0，跳過 Step 9 下半段處理。")
+                    print("ℹ️ credit_amount is missing or 0, skipping the rest of Step 9.")
                 else:
-                    print(f"✅ 偵測到 credit_amount 存在 (值為: {target_credit_amt})，開始執行 Step 9 新增 Credit Line 流程...")
+                    print(f"✅ credit_amount detected (value: {target_credit_amt}), starting the Step 9 Add Credit Line process...")
 
                     # 1. 先判斷 credit_account 的值
                     ac_code = target_account_code.strip()
                     credit_account = get_credit_account(ac_code)
 
-                    print(f"📊 account_code 為 '{ac_code}' ➔ 判定 credit_account 應輸入: '{credit_account}'")
+                    print(f"📊 account_code is '{ac_code}' ➔ credit_account should be: '{credit_account}'")
 
                     # 2. 尋找並點擊 + Add line 按鈕
-                    print("🔍 正在尋找 '+ Add line' 按鈕 (排除 Fixed 及 Percent)...")
+                    print("🔍 Searching for the '+ Add line' button (excluding Fixed and Percent)...")
                     add_line_candidates = [
                         "xpath=//button[contains(., 'Add line') and not(contains(., 'Fixed')) and not(contains(., 'Percent'))]",
                         "xpath=//button[contains(., 'Add Line') and not(contains(., 'Fixed')) and not(contains(., 'Percent'))]",
@@ -1202,7 +1202,7 @@ async def run_d365_rpa(records):
                         loc = page.locator(sel).first
                         if await loc.count() > 0:
                             add_line_btn = loc
-                            print(f"🎯 Step 9: 成功匹配 Add line 按鈕: {sel}")
+                            print(f"🎯 Step 9: Matched Add line button: {sel}")
                             break
 
                     if not add_line_btn or await add_line_btn.count() == 0:
@@ -1211,56 +1211,56 @@ async def run_d365_rpa(records):
                     if add_line_btn and await add_line_btn.count() > 0:
                         await add_line_btn.evaluate("el => el.scrollIntoView({block: 'center', inline: 'nearest'})")
                         await page.wait_for_timeout(500)
-                        print("👇 點擊 '+ Add line' 按鈕...")
+                        print("👇 Clicking the '+ Add line' button...")
                         await add_line_btn.click(force=True)
 
                         await wait_for_new_row_after_add_line(page)
 
                         # 3. 輸入 credit_account 並按 3 次 Tab
-                        print(f"⌨️ 輸入 credit_account: {credit_account}")
+                        print(f"⌨️ Typing credit_account: {credit_account}")
                         await page.keyboard.type(credit_account, delay=50)
 
-                        print("⌨️ 按 3 次 Tab 鍵 (每 100ms 間隔)...")
+                        print("⌨️ Pressing Tab 3 times (100ms apart)...")
                         for _ in range(3):
                             await page.keyboard.press("Tab")
                             await page.wait_for_timeout(100)
 
                         # 4. 輸入 discount 並按 6 次 Tab
-                        print("⌨️ 輸入 'discount'...")
+                        print("⌨️ Typing 'discount'...")
                         await page.keyboard.type("discount", delay=50)
 
-                        print("⌨️ 按 6 次 Tab 鍵 (每 100ms 間隔)...")
+                        print("⌨️ Pressing Tab 6 times (100ms apart)...")
                         for _ in range(6):
                             await page.keyboard.press("Tab")
                             await page.wait_for_timeout(100)
 
                         # 5. 輸入 -1 並按 2 次 Tab
-                        print("⌨️ 輸入 '-1'...")
+                        print("⌨️ Typing '-1'...")
                         await page.keyboard.type("-1", delay=50)
 
-                        print("⌨️ 按 2 次 Tab 鍵 (每 100ms 間隔)...")
+                        print("⌨️ Pressing Tab 2 times (100ms apart)...")
                         for _ in range(2):
                             await page.keyboard.press("Tab")
                             await page.wait_for_timeout(100)
 
                         # 6. 輸入 credit_amount 的絕對值
                         abs_credit_str = str(abs(credit_amt_val))
-                        print(f"⌨️ 輸入 credit_amount 絕對值: {abs_credit_str}")
+                        print(f"⌨️ Typing the absolute credit_amount value: {abs_credit_str}")
                         await page.keyboard.type(abs_credit_str, delay=50)
 
                         # 7. 按 Alt+S 儲存
-                        print("💾 按下 Alt+S 進行儲存...")
+                        print("💾 Pressing Alt+S to save...")
                         await page.keyboard.press("Alt+s")
                         await page.wait_for_timeout(1000)
 
-                        print("✅ Step 9 處理完成並已觸發 Alt+S 儲存！")
+                        print("✅ Step 9 complete, Alt+S save triggered!")
                     else:
-                        print("❌ Step 9: 未能定位到 '+ Add line' 按鈕！")
+                        print("❌ Step 9: Could not locate the '+ Add line' button!")
 
             # =============================================================
             # 📌 Step 10: 從 Google Drive 下載附件並上傳至 D365 Attachments
             # =============================================================
-            print("\n👉 Step 10: 正在從 Google Drive 下載 PO 對應附件...")
+            print("\n👉 Step 10: Downloading the PO's attachments from Google Drive...")
 
             need_credit_note = bool(target_credit_amt) and clean_amount(target_credit_amt) != 0.0
             downloaded_files = download_po_attachments(target_po, need_credit_note)
@@ -1270,14 +1270,14 @@ async def run_d365_rpa(records):
 
             if missing_required or missing_credit_note:
                 error_msg = "error: missing drive file"
-                print("❌ 缺少必要附件，立即進入 error reporting。")
+                print("❌ Missing required attachment(s), proceeding directly to error reporting.")
                 update_vessel_sheet_status(current_vessel, current_po, error_msg)
                 results.append({"vessel": current_vessel, "po": current_po, "status": "error", "error": error_msg})
                 await click_finance_and_operations(page)
-                print("⏭️ 已記錄錯誤並繼續下一筆 PO。")
+                print("⏭️ Error logged, moving on to the next PO.")
                 continue
 
-            print("👉 正在點擊 'Attachments'...")
+            print("👉 Clicking 'Attachments'...")
             attachments_candidates = [
                 page.get_by_role("tab", name="Attachments", exact=False),
                 page.get_by_role("button", name="Attachments", exact=False),
@@ -1295,9 +1295,9 @@ async def run_d365_rpa(records):
 
             await attachments_target.first.wait_for(state="visible", timeout=15000)
             await attachments_target.first.click()
-            print("✅ 已點擊 'Attachments'，先等待 1 秒讓畫面開始 refresh...")
+            print("✅ Clicked 'Attachments', waiting 1 second for the screen to start refreshing...")
             await page.wait_for_timeout(1000)
-            print("⏳ 再等待畫面 networkidle 及穩定...")
+            print("⏳ Waiting for the page to reach networkidle and settle...")
             await page.wait_for_load_state("networkidle", timeout=20000)
             await page.wait_for_timeout(1500)
 
@@ -1311,20 +1311,20 @@ async def run_d365_rpa(records):
             for file_key, doc_type_label in upload_plan:
                 await upload_attachment_via_new(page, downloaded_files[file_key], doc_type_label)
 
-            print("✅ Step 10 附件上傳流程完成。")
+            print("✅ Step 10 attachment upload complete.")
 
             # =============================================================
             # 📌 Step 11: 根據 vessel_name 取得對應的 vessel_po_list (spreadsheet id)
             #          並在該 spreadsheet 搜尋 po_number 所在列，將 Column R 更新為 'draft'
             # =============================================================
-            print("\n👉 Step 11: 進入 Step 11 處理流程...")
+            print("\n👉 Step 11: Entering the Step 11 process...")
 
             vessel = item.get("vessel_name", "").strip()
             update_vessel_sheet_status(vessel, target_po, "draft")
             results.append({"vessel": current_vessel, "po": current_po, "status": "success"})
 
             await click_finance_and_operations(page)
-            print("✅ Step 11 步驟處理完成。")
+            print("✅ Step 11 complete.")
 
     except Exception as e:
         error_msg = error_msg or str(e) or "RPA error"
@@ -1334,12 +1334,12 @@ async def run_d365_rpa(records):
             results.append({"vessel": current_vessel, "po": current_po, "status": "error", "error": error_msg})
             await click_finance_and_operations(page)
         else:
-            print(f"❌ 執行中發生未預期錯誤: {e}")
+            print(f"❌ Unexpected error during execution: {e}")
 
     finally:
         # 📋 列印所有 PO 的處理結果總覽 (vessel_name / status)
         print("\n" + "="*60)
-        print("📋 處理結果總覽:")
+        print("📋 Processing summary:")
         print("="*60)
         if results:
             for i, r in enumerate(results, 1):
@@ -1349,20 +1349,20 @@ async def run_d365_rpa(records):
                     status_display = f"❌ Error ({r.get('error', '')})"
                 print(f"  [{i}] Vessel: {r['vessel']} | PO: {r['po']} | {status_display}")
         else:
-            print("  (無任何處理紀錄)")
+            print("  (No records processed)")
         print("="*60 + "\n")
 
         # 🎯 保持瀏覽器開啟以便進行 Debug
         print("\n" + "="*60)
-        print("⏸️ [Debug 模式] 全部 PO 處理完成！瀏覽器將保持開啟狀態供您檢查與 Debug。")
-        print("當您完成 Debug 後，請在 Terminal 按 Enter 鍵結束腳本並關閉瀏覽器...")
+        print("⏸️ [Debug mode] All POs processed! The browser will stay open for you to inspect and debug.")
+        print("When you're done debugging, press Enter in the Terminal to end the script and close the browser...")
         print("="*60 + "\n")
-        await asyncio.to_thread(input, "按下 Enter 鍵關閉程式: ")
+        await asyncio.to_thread(input, "Press Enter to close the program: ")
 
 async def main():
     step0_ok = refresh_pending_invoices()
     if not step0_ok:
-        print("❌ Step 0 未能完成，RPA 中止（沒有最新的 pending PO 資料可處理）。")
+        print("❌ Step 0 did not complete successfully, aborting RPA (no up-to-date pending PO data to process).")
         return
 
     records_data = get_data_via_sheets_api()
